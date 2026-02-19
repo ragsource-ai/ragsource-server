@@ -46,7 +46,7 @@ jobs:
       - name: DB neu bauen (remote D1)
         run: |
           npx tsx scripts/build-db.ts --remote \
-            --content-root=../ragsource-content/regelungsrahmen
+            --content-root=$GITHUB_WORKSPACE/ragsource-content/regelungsrahmen
         working-directory: ragsource-server
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
