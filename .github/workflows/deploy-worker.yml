@@ -1,0 +1,65 @@
+name: Deploy Worker (Server-Code geändert)
+
+# Läuft nur bei Änderungen am Server-Code selbst.
+# Baut die DB neu UND deployt den Worker.
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    name: DB bauen + Worker deployen
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout ragsource-server
+        uses: actions/checkout@v4
+        with:
+          path: ragsource-server
+
+      - name: Checkout ragsource-content (Regelungsrahmen, Säule 1)
+        uses: actions/checkout@v4
+        with:
+          repository: ragsource-ai/ragsource-content
+          path: ragsource-content
+
+      # Zukünftig: weitere Content-Repos hier ergänzen
+      # - name: Checkout amtsschimmel-ai/wiki (Säule 2)
+      #   uses: actions/checkout@v4
+      #   with:
+      #     repository: amtsschimmel-ai/wiki
+      #     token: ${{ secrets.CROSS_ORG_PAT }}
+      #     path: amtsschimmel-wiki
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: ragsource-server/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ragsource-server
+
+      - name: DB neu bauen (remote D1)
+        run: |
+          npx tsx scripts/build-db.ts --remote \
+            --content-root=../../ragsource-content/regelungsrahmen
+        working-directory: ragsource-server
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Worker deployen
+        run: npx wrangler deploy
+        working-directory: ragsource-server
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Health-Check
+        run: |
+          sleep 5
+          curl -f https://ragsource-api.ragsource.workers.dev/api/health

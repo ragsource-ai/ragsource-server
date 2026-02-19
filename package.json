@@ -1,0 +1,27 @@
+{
+  "name": "ragsource-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init:local": "wrangler d1 execute ragsource-db --local --file=schema.sql",
+    "db:init:remote": "wrangler d1 execute ragsource-db --remote --file=schema.sql",
+    "db:seed:local": "tsx scripts/build-db.ts --local",
+    "db:seed:remote": "tsx scripts/build-db.ts --remote"
+  },
+  "dependencies": {
+    "agents": "^0.0.74",
+    "hono": "^4.7.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250214.0",
+    "@types/node": "^25.3.0",
+    "gray-matter": "^4.0.3",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^4.0.0"
+  }
+}

@@ -1,0 +1,23 @@
+node_modules/
+.wrangler/
+.build-seed.sql
+
+# Windows-Artefakt
+nul
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Lokale Secrets
+.env
+.env.local
+*.secret
