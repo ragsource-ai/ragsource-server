@@ -10,15 +10,15 @@ export interface RetrievalConfig {
 const DEFAULT_CONFIG: RetrievalConfig = {
   min_score: 0.15,
   max_articles: 5,
-  token_budget: 20000,
+  token_budget: 40000,
   score_gap_threshold: 0.6,
 };
 
 // Retrieval-Filter sind für alle Personas gleich.
 // Der Unterschied liegt im Antwort-Prompt (Sprache, Format, Detailtiefe).
 const PERSONA_OVERRIDES: Record<Persona, Partial<RetrievalConfig>> = {
-  buerger: { max_articles: 3, token_budget: 10000 },
-  gemeinderat: { max_articles: 4, token_budget: 15000 },
+  buerger: { max_articles: 3 },
+  gemeinderat: { max_articles: 4 },
   verwaltung: {},
   buergermeister: {},
 };
