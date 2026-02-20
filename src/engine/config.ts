@@ -11,7 +11,7 @@ const DEFAULT_CONFIG: RetrievalConfig = {
   min_score: 0.15,
   max_articles: 5,
   token_budget: 40000,
-  score_gap_threshold: 0.6,
+  score_gap_threshold: 0.3,
 };
 
 // Retrieval-Filter sind für alle Personas gleich.
