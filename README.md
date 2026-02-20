@@ -4,8 +4,8 @@ Cloudflare Worker mit D1-Datenbank (SQLite + FTS5), der kommunales Verwaltungswi
 
 **Live:** `https://ragsource-api.ragsource.workers.dev`
 **MCP-Endpunkt:** `https://ragsource-api.ragsource.workers.dev/mcp`
-**MCP-Version:** 1.2.0
-**Status:** Phase 1d live (ARS-basierte Geo-Filterung)
+**MCP-Version:** 1.3.0
+**Status:** Phase 1e live (Unified `geo`-Parameter, ARS-basierte Geo-Filterung)
 
 ---
 
@@ -38,6 +38,7 @@ ragsource-server/
 │   ├── types.ts              # TypeScript-Typen
 │   └── engine/
 │       ├── matcher.ts        # 4-Stufen FTS5-Retrieval + Geo/Projekt-Filter
+│       ├── normalize.ts      # Geo-Aufloesung: geo-Parameter → ARS + Ebene + Klarnamen
 │       ├── hierarchy.ts      # Normenhierarchie-Sortierung
 │       ├── response.ts       # Response-Paket bauen
 │       └── config.ts         # Retrieval-Konfiguration + Persona-Overrides
@@ -92,11 +93,13 @@ curl -X POST https://ragsource-api.ragsource.workers.dev/api/query \
   -H "Content-Type: application/json" \
   -d '{
     "query": "Wie wird der Feuerwehrkommandant gewaehlt?",
-    "gemeinde": "bad-boll",
+    "geo": "081175009012",
     "persona": "buerger",
     "hints": ["Feuerwehr", "Kommandant", "Wahl"]
   }'
 ```
+
+Der `geo`-Parameter akzeptiert ARS-Codes (Laenge bestimmt Ebene: 2=Land, 5=Kreis, 9=Verband, 12=Gemeinde) oder Klarnamen/Slugs (z.B. `Bad Boll`, `bad-boll`), die via `geo_aliases` aufgeloest werden.
 
 ---
 
@@ -118,9 +121,7 @@ Alle Filter sind optional. Ohne Filter werden alle publizierten Artikel durchsuc
 
 | Parameter | Typ | Beschreibung |
 |-----------|-----|--------------|
-| `gemeinde` | string | Gemeinde-Slug, Klarname oder ARS (z.B. `bad-boll`, `Bad Boll`, `081175009012`). Intern via `geo_aliases` zu ARS normalisiert. Auto-Resolve: Verband/Kreis/Land werden automatisch abgeleitet |
-| `bundesland` | string | Bundesland-Kuerzel, Klarname oder ARS (z.B. `bw`, `Baden-Württemberg`, `08`) |
-| `landkreis` | string | Landkreis-Slug, Klarname oder ARS (z.B. `goeppingen`, `Göppingen`, `08117`) |
+| `geo` | string | ARS-Code oder Klarname/Slug. ARS-Laenge bestimmt Ebene: `08` (Land), `08117` (Kreis), `081175009` (Verband), `081175009012` (Gemeinde). Klarnamen (z.B. `Bad Boll`, `bw`) werden via `geo_aliases` aufgeloest. Uebergeordnete Ebenen werden automatisch abgeleitet. **"Nur aufwaerts":** Verbands-Anfragen zeigen nur Verband/Kreis/Land/Bund, keine Gemeinde-Artikel |
 | `projekt` | string | Projekt-Slug fuer Projekt-Filter |
 | `persona` | enum | `buerger` \| `gemeinderat` \| `verwaltung` \| `buergermeister` |
 
@@ -135,7 +136,16 @@ Artikel sind Markdown-Dateien mit YAML-Frontmatter. Sie leben in einem separaten
 titel: Feuerwehrsatzung der Gemeinde Bad Boll
 ebene: gemeinde          # bund | land | kreis | verband | gemeinde
 saule: regelungsrahmen
-gemeinde: bad-boll
+# ARS-Felder (maschinell, fuer Geo-Filterung)
+land_ars: "08"
+kreis_ars: "08117"
+verband_ars: "081175009"
+gemeinde_ars: "081175009012"
+# Klartext-Felder (Lesehilfe)
+land: Baden-Wuerttemberg
+kreis: Goeppingen
+verband: GVV Raum Bad Boll
+gemeinde: Bad Boll
 projekte:
   - amtsschimmel
 keywords:
