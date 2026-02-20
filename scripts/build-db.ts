@@ -10,7 +10,7 @@
  *   npx tsx scripts/build-db.ts --remote   # Remote D1
  */
 
-import { readFileSync, readdirSync, statSync } from "fs";
+import { readFileSync, readdirSync, statSync, writeFileSync, unlinkSync, existsSync } from "fs";
 import { join, relative } from "path";
 import matter from "gray-matter";
 import { execSync } from "child_process";
@@ -106,16 +106,59 @@ for (const root of contentRoots) {
 }
 console.log(`📄 ${mdFilesWithRoot.length} Markdown-Dateien gefunden (aus ${contentRoots.length} Root(s))`);
 
-// SQL-Statements sammeln
-const statements: string[] = [];
+// Schema anwenden: DROP + CREATE (idempotent, Schema immer aktuell)
+console.log("\n🗃️  Schema anwenden (DROP + CREATE)...");
 
-// Tabellen leeren (aber Schema beibehalten)
-statements.push("DELETE FROM article_projekte;");
-statements.push("DELETE FROM relations;");
-statements.push("DELETE FROM questions;");
-statements.push("DELETE FROM keywords;");
-statements.push("DELETE FROM articles_fts;");
-statements.push("DELETE FROM articles;");
+const schemaDrop = [
+  "DROP TABLE IF EXISTS article_projekte;",
+  "DROP TABLE IF EXISTS relations;",
+  "DROP TABLE IF EXISTS questions;",
+  "DROP TABLE IF EXISTS keywords;",
+  "DROP TABLE IF EXISTS articles_fts;",
+  "DROP TABLE IF EXISTS keywords_fts;",
+  "DROP TABLE IF EXISTS questions_fts;",
+  "DROP TABLE IF EXISTS articles;",
+  "DROP TABLE IF EXISTS gemeinden;",
+  "DROP TABLE IF EXISTS geo_aliases;",
+].join("\n");
+
+const schemaFile = join(import.meta.dirname!, "..", "schema.sql");
+const schemaSql = readFileSync(schemaFile, "utf-8");
+
+// DROP alte Tabellen
+const dropFile = join(import.meta.dirname!, "..", ".build-drop.sql");
+writeFileSync(dropFile, schemaDrop, "utf-8");
+try {
+  execSync(
+    `npx wrangler d1 execute ${DB_NAME} ${mode} --file=.build-drop.sql`,
+    { cwd: join(import.meta.dirname!, ".."), stdio: "pipe" },
+  );
+  console.log("  DROP ✅");
+} catch (e) {
+  console.error("❌ Fehler beim DROP", e);
+  if (existsSync(dropFile)) unlinkSync(dropFile);
+  process.exit(1);
+}
+if (existsSync(dropFile)) unlinkSync(dropFile);
+
+// CREATE neues Schema + Seed-Daten (gemeinden, geo_aliases)
+const schemaOutFile = join(import.meta.dirname!, "..", ".build-schema.sql");
+writeFileSync(schemaOutFile, schemaSql, "utf-8");
+try {
+  execSync(
+    `npx wrangler d1 execute ${DB_NAME} ${mode} --file=.build-schema.sql`,
+    { cwd: join(import.meta.dirname!, ".."), stdio: "pipe" },
+  );
+  console.log("  CREATE + SEED ✅");
+} catch (e) {
+  console.error("❌ Fehler beim Schema-Anlegen", e);
+  if (existsSync(schemaOutFile)) unlinkSync(schemaOutFile);
+  process.exit(1);
+}
+if (existsSync(schemaOutFile)) unlinkSync(schemaOutFile);
+
+// SQL-Statements sammeln (nur Artikel-Daten, Schema ist schon angelegt)
+const statements: string[] = [];
 
 let imported = 0;
 
@@ -244,8 +287,6 @@ console.log(`📝 ${statements.length} SQL-Statements generiert`);
 
 // SQL in Batches aufteilen und nacheinander ausführen
 // (Wrangler crasht bei sehr großen SQL-Dateien lokal)
-import { writeFileSync, unlinkSync, existsSync } from "fs";
-
 const BATCH_SIZE = 100;
 const batches: string[][] = [];
 for (let i = 0; i < statements.length; i += BATCH_SIZE) {
