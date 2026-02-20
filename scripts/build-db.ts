@@ -141,8 +141,9 @@ try {
 }
 if (existsSync(schemaOutFile)) unlinkSync(schemaOutFile);
 
-// SQL-Statements sammeln (nur Artikel-Daten, Schema ist schon angelegt)
-const statements: string[] = [];
+// SQL-Statements sammeln, gruppiert pro Artikel (nie über Artikelgrenzen batchen)
+const articleGroups: string[][] = [];
+const tailStatements: string[] = []; // FTS-Rebuild am Ende
 
 let imported = 0;
 
@@ -215,14 +216,17 @@ for (const { file, root } of mdFilesWithRoot) {
   imported++;
   console.log(`  ✅ ${fm.titel} (${tokenCount} Tokens, land=${land_ars || '-'}, kreis=${kreis_ars || '-'}, verband=${verband_ars || '-'}, gemeinde=${gemeinde_ars || '-'}, proj=[${projekte.join(',')}])`);
 
+  // Alle Statements dieses Artikels als Gruppe sammeln (nie über Artikelgrenzen batchen)
+  const group: string[] = [];
+
   // Article einfügen (mit ARS-Spalten)
-  statements.push(
+  group.push(
     `INSERT INTO articles (titel, land_ars, kreis_ars, verband_ars, gemeinde_ars, ebene, saule, content, gueltig_ab, status, dateipfad, quelle, token_count) VALUES (${esc(fm.titel)}, ${esc(land_ars)}, ${esc(kreis_ars)}, ${esc(verband_ars)}, ${esc(gemeinde_ars)}, ${esc(ebene)}, ${esc(fm.saule)}, ${esc(content)}, ${esc(fm.gueltig_ab)}, ${esc(fm.status || "published")}, ${esc(dateipfad)}, ${esc(fm.quelle)}, ${tokenCount});`,
   );
 
   // Projekte (Junction-Tabelle)
   for (const p of projekte) {
-    statements.push(
+    group.push(
       `INSERT INTO article_projekte (article_id, projekt) VALUES ((SELECT MAX(id) FROM articles), ${esc(p)});`,
     );
   }
@@ -230,7 +234,7 @@ for (const { file, root } of mdFilesWithRoot) {
   // Keywords
   const keywords: string[] = fm.keywords || [];
   for (const kw of keywords) {
-    statements.push(
+    group.push(
       `INSERT INTO keywords (article_id, keyword) VALUES ((SELECT MAX(id) FROM articles), ${esc(kw)});`,
     );
   }
@@ -238,7 +242,7 @@ for (const { file, root } of mdFilesWithRoot) {
   // Fragen
   const fragen: string[] = fm.fragen || [];
   for (const f of fragen) {
-    statements.push(
+    group.push(
       `INSERT INTO questions (article_id, question) VALUES ((SELECT MAX(id) FROM articles), ${esc(f)});`,
     );
   }
@@ -246,30 +250,51 @@ for (const { file, root } of mdFilesWithRoot) {
   // Querverweise
   const querverweise: string[] = fm.querverweise || [];
   for (const qv of querverweise) {
-    statements.push(
+    group.push(
       `INSERT INTO relations (article_id, related_titel) VALUES ((SELECT MAX(id) FROM articles), ${esc(qv)});`,
     );
   }
 
   // FTS5: articles_fts befüllen (rowid = articles.id)
-  statements.push(
+  group.push(
     `INSERT INTO articles_fts (rowid, titel, content) VALUES ((SELECT MAX(id) FROM articles), ${esc(fm.titel)}, ${esc(content)});`,
   );
+
+  articleGroups.push(group);
 }
 
 // keywords_fts und questions_fts rebuilden (content-sync tables)
-statements.push("INSERT INTO keywords_fts(keywords_fts) VALUES('rebuild');");
-statements.push("INSERT INTO questions_fts(questions_fts) VALUES('rebuild');");
+tailStatements.push("INSERT INTO keywords_fts(keywords_fts) VALUES('rebuild');");
+tailStatements.push("INSERT INTO questions_fts(questions_fts) VALUES('rebuild');");
 
+const totalStatements = articleGroups.reduce((sum, g) => sum + g.length, 0) + tailStatements.length;
 console.log(`\n📊 ${imported} Artikel importiert`);
-console.log(`📝 ${statements.length} SQL-Statements generiert`);
+console.log(`📝 ${totalStatements} SQL-Statements generiert`);
 
-// SQL in Batches aufteilen und nacheinander ausführen
-// (Wrangler crasht bei sehr großen SQL-Dateien lokal)
+// SQL in Batches aufteilen — Artikelgrenzen respektieren
+// (Nie einen Artikel über zwei Batches splitten, da child-Inserts
+//  via SELECT MAX(id) auf den Parent angewiesen sind)
 const BATCH_SIZE = 100;
 const batches: string[][] = [];
-for (let i = 0; i < statements.length; i += BATCH_SIZE) {
-  batches.push(statements.slice(i, i + BATCH_SIZE));
+let currentBatch: string[] = [];
+
+for (const group of articleGroups) {
+  // Wenn der aktuelle Batch + diese Gruppe > BATCH_SIZE wäre, neuen Batch starten
+  // (außer der Batch ist noch leer — dann passt die Gruppe immer rein)
+  if (currentBatch.length > 0 && currentBatch.length + group.length > BATCH_SIZE) {
+    batches.push(currentBatch);
+    currentBatch = [];
+  }
+  currentBatch.push(...group);
+}
+
+// Tail-Statements (FTS-Rebuild) an letzten Batch anhängen oder neuen erstellen
+if (currentBatch.length + tailStatements.length > BATCH_SIZE) {
+  batches.push(currentBatch);
+  batches.push(tailStatements);
+} else {
+  currentBatch.push(...tailStatements);
+  batches.push(currentBatch);
 }
 
 console.log(`\n🚀 Führe SQL aus (${mode}) in ${batches.length} Batches à max. ${BATCH_SIZE} Statements...`);
