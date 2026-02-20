@@ -37,11 +37,11 @@ ragsource-server/
 │   ├── api.ts                # REST-Endpunkte (Hono)
 │   ├── types.ts              # TypeScript-Typen
 │   └── engine/
-│       ├── matcher.ts        # 4-Stufen FTS5-Retrieval + Geo/Projekt-Filter
+│       ├── matcher.ts        # 5-Stufen FTS5-Retrieval + Geo/Projekt-Filter
 │       ├── normalize.ts      # Geo-Aufloesung: geo-Parameter → ARS + Ebene + Klarnamen
 │       ├── hierarchy.ts      # Normenhierarchie-Sortierung
 │       ├── response.ts       # Response-Paket bauen
-│       └── config.ts         # Retrieval-Konfiguration + Persona-Overrides
+│       └── config.ts         # Retrieval-Konfiguration (einheitliche Filter, Persona nur Output)
 ├── scripts/
 │   └── build-db.ts           # Markdown → D1 Build-Pipeline
 ├── data/
@@ -103,13 +103,14 @@ Der `geo`-Parameter akzeptiert ARS-Codes (Laenge bestimmt Ebene: 2=Land, 5=Kreis
 
 ---
 
-## Retrieval: 4-Stufen-System
+## Retrieval: 5-Stufen-System
 
 ```
-Stufe 1: FTS5 ueber Artikel-Content + Titel  (BM25-Ranking)
-Stufe 2: FTS5 ueber kuratierte Fragen        (natuerliche Sprache)
-Stufe 3: FTS5 ueber LLM-Hints               (Synonyme, Fachbegriffe)
-Stufe 4: Titel-Match ueber LLM-Sources       (vermutete Dokumenttitel)
+Stufe 1: FTS5 ueber Titel + Content          (BM25-Ranking)          — 0.35
+Stufe 2: FTS5 ueber kuratierte Fragen        (natuerliche Sprache)   — 0.20
+Stufe 3: FTS5 ueber Keywords                 (Frontmatter-Keywords)  — 0.20
+Stufe 4: FTS5 ueber LLM-Hints               (Synonyme, Fachbegriffe) — 0.15
+Stufe 5: Titel-Match ueber LLM-Sources       (vermutete Dokumenttitel) — 0.10
          └── Scores kombinieren → Top-Artikel → Hierarchie pruefen → ans LLM
 ```
 

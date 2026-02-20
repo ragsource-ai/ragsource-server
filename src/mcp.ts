@@ -60,7 +60,7 @@ export class RAGSourceMCP extends McpAgent<Env> {
         // Geo-Auflösung: 1 Parameter → ARS + Level
         const geo = geoInput ? await resolveGeo(geoInput, db) : null;
 
-        // 4-Stufen-Retrieval mit ARS-Filtern
+        // 5-Stufen-Retrieval mit ARS-Filtern
         const articles = await search(db, {
           query,
           gemeinde_ars: geo?.gemeinde_ars ?? undefined,
