@@ -14,7 +14,7 @@ interface CandidateScores {
  * Geo- und Projekt-Filter: Baut dynamisch SQL-WHERE-Fragmente.
  *
  * Alle Filter sind optional. Wenn nichts gesetzt ist, wird nur
- * `a.status = 'published'` geprüft (Phase 1a-Verhalten).
+ * `a.status = 'published'` geprüft.
  */
 interface FilterResult {
   sql: string;      // SQL WHERE-Fragment (ohne führendes AND)
@@ -25,31 +25,39 @@ function buildGeoProjectFilter(params: QueryParams): FilterResult {
   const conditions: string[] = ["a.status = 'published'"];
   const bindParams: any[] = [];
 
-  // --- Geo-Filter (unabhängig, kaskadierend) ---
+  // --- Geo-Filter (unabhängig, kaskadierend, ARS-basiert) ---
 
-  if (params.gemeinde) {
+  if (params.gemeinde_ars) {
     // Gemeinde-Filter: Artikel auf höheren Ebenen passieren immer durch.
-    // Auf Gemeinde-Ebene muss der Slug matchen oder NULL sein.
+    // Auf Gemeinde-Ebene muss der ARS matchen oder NULL sein.
     conditions.push(
-      "(a.ebene IN ('bund', 'land', 'kreis', 'gvv') OR a.gemeinde = ? OR a.gemeinde IS NULL)"
+      "(a.ebene IN ('bund', 'land', 'kreis', 'verband') OR a.gemeinde_ars = ? OR a.gemeinde_ars IS NULL)"
     );
-    bindParams.push(params.gemeinde);
+    bindParams.push(params.gemeinde_ars);
   }
 
-  if (params.landkreis) {
-    // Landkreis-Filter: Bund + Land passieren. Kreis/GVV/Gemeinde müssen matchen.
+  if (params.verband_ars) {
+    // Verband-Filter: Bund + Land + Kreis passieren. Verband/Gemeinde müssen matchen.
     conditions.push(
-      "(a.ebene IN ('bund', 'land') OR a.landkreis = ? OR a.landkreis IS NULL)"
+      "(a.ebene IN ('bund', 'land', 'kreis') OR a.verband_ars = ? OR a.verband_ars IS NULL)"
     );
-    bindParams.push(params.landkreis);
+    bindParams.push(params.verband_ars);
   }
 
-  if (params.bundesland) {
-    // Bundesland-Filter: Bund passiert. Land/Kreis/GVV/Gemeinde müssen matchen.
+  if (params.kreis_ars) {
+    // Landkreis-Filter: Bund + Land passieren. Kreis/Verband/Gemeinde müssen matchen.
     conditions.push(
-      "(a.ebene = 'bund' OR a.bundesland = ? OR a.bundesland IS NULL)"
+      "(a.ebene IN ('bund', 'land') OR a.kreis_ars = ? OR a.kreis_ars IS NULL)"
     );
-    bindParams.push(params.bundesland);
+    bindParams.push(params.kreis_ars);
+  }
+
+  if (params.land_ars) {
+    // Bundesland-Filter: Bund passiert. Land/Kreis/Verband/Gemeinde müssen matchen.
+    conditions.push(
+      "(a.ebene = 'bund' OR a.land_ars = ? OR a.land_ars IS NULL)"
+    );
+    bindParams.push(params.land_ars);
   }
 
   // --- Projekt-Filter ---
@@ -79,7 +87,7 @@ function buildGeoProjectFilter(params: QueryParams): FilterResult {
 }
 
 /**
- * 4-Stufen-Retrieval (Phase 1b, mit Geo- und Projekt-Filtern)
+ * 4-Stufen-Retrieval (mit Geo- und Projekt-Filtern)
  *
  * Stufe 1: FTS5 über articles_fts (Titel + Content)
  * Stufe 2: FTS5 über questions_fts (typische Fragen)
@@ -100,7 +108,7 @@ export async function search(
   if (ftsQuery) {
     const results = await db
       .prepare(
-        `SELECT a.id, a.titel, a.ebene, a.saule, a.gemeinde, a.dateipfad,
+        `SELECT a.id, a.titel, a.ebene, a.saule, a.gemeinde_ars, a.dateipfad,
               a.content, a.quelle, a.token_count, a.gueltig_ab, a.status,
               bm25(articles_fts, 5.0, 1.0) AS rank
        FROM articles_fts
@@ -129,7 +137,6 @@ export async function search(
   }
 
   // --- Stufe 2: FTS5 über typische Fragen ---
-  // Phase 1b: Jetzt MIT Geo-/Projekt-Filter (vorher ungefiltert)
   if (ftsQuery) {
     const qResults = await db
       .prepare(

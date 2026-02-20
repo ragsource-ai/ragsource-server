@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 import type { Env, Persona, Gemeinde } from "./types.js";
 import { search } from "./engine/matcher.js";
 import { buildResponsePacket } from "./engine/response.js";
+import { normalizeGeoParam } from "./engine/normalize.js";
 
 type HonoEnv = { Bindings: Env };
 
@@ -19,7 +20,7 @@ export function createApp() {
     return c.json({
       status: "ok",
       articles_count: result?.count ?? 0,
-      version: "0.1.0",
+      version: "1.2.0",
     });
   });
 
@@ -28,11 +29,39 @@ export function createApp() {
     const q = c.req.query("q");
     if (!q) return c.json({ error: "Parameter 'q' fehlt" }, 400);
 
-    const results = await search(c.env.DB, {
+    const db = c.env.DB;
+    const gemeinde = c.req.query("gemeinde") || undefined;
+    const bundesland = c.req.query("bundesland") || undefined;
+    const landkreis = c.req.query("landkreis") || undefined;
+
+    // Geo-Parameter normalisieren → ARS
+    const gemeindeArs = gemeinde ? await normalizeGeoParam(gemeinde, "gemeinde", db) : null;
+    const kreisArs = landkreis ? await normalizeGeoParam(landkreis, "landkreis", db) : null;
+    const landArs = bundesland ? await normalizeGeoParam(bundesland, "bundesland", db) : null;
+
+    // Auto-Resolve: Gemeinde → Verband/Kreis/Land
+    let verbandArs: string | null = null;
+    let resolvedKreisArs = kreisArs;
+    let resolvedLandArs = landArs;
+
+    if (gemeindeArs) {
+      const gemeindeRow = await db
+        .prepare("SELECT * FROM gemeinden WHERE ars = ?")
+        .bind(gemeindeArs)
+        .first<Gemeinde>();
+      if (gemeindeRow) {
+        verbandArs = gemeindeRow.verband_ars;
+        if (!resolvedKreisArs) resolvedKreisArs = gemeindeRow.kreis_ars;
+        if (!resolvedLandArs) resolvedLandArs = gemeindeRow.land_ars;
+      }
+    }
+
+    const results = await search(db, {
       query: q,
-      gemeinde: c.req.query("gemeinde") || undefined,
-      bundesland: c.req.query("bundesland") || undefined,
-      landkreis: c.req.query("landkreis") || undefined,
+      gemeinde_ars: gemeindeArs ?? undefined,
+      verband_ars: verbandArs ?? undefined,
+      kreis_ars: resolvedKreisArs ?? undefined,
+      land_ars: resolvedLandArs ?? undefined,
       projekt: c.req.query("projekt") || undefined,
       persona: "buerger",
     });
@@ -78,25 +107,39 @@ export function createApp() {
 
     if (!body.query) return c.json({ error: "Feld 'query' fehlt" }, 400);
 
-    const gemeinde = body.gemeinde || undefined;
+    const db = c.env.DB;
     const persona = body.persona || "buerger";
 
-    // Gemeinde-Hierarchie auflösen (nur wenn gemeinde übergeben)
+    // Geo-Parameter normalisieren → ARS
+    const gemeindeArs = body.gemeinde ? await normalizeGeoParam(body.gemeinde, "gemeinde", db) : null;
+    const kreisArs = body.landkreis ? await normalizeGeoParam(body.landkreis, "landkreis", db) : null;
+    const landArs = body.bundesland ? await normalizeGeoParam(body.bundesland, "bundesland", db) : null;
+
+    // Auto-Resolve: Gemeinde → Verband/Kreis/Land
+    let verbandArs: string | null = null;
+    let resolvedKreisArs = kreisArs;
+    let resolvedLandArs = landArs;
     let gemeindeRow: Gemeinde | null = null;
-    if (gemeinde) {
-      gemeindeRow = await c.env.DB.prepare(
-        "SELECT * FROM gemeinden WHERE slug = ?",
-      )
-        .bind(gemeinde)
+
+    if (gemeindeArs) {
+      gemeindeRow = await db
+        .prepare("SELECT * FROM gemeinden WHERE ars = ?")
+        .bind(gemeindeArs)
         .first<Gemeinde>();
+      if (gemeindeRow) {
+        verbandArs = gemeindeRow.verband_ars;
+        if (!resolvedKreisArs) resolvedKreisArs = gemeindeRow.kreis_ars;
+        if (!resolvedLandArs) resolvedLandArs = gemeindeRow.land_ars;
+      }
     }
 
     // Retrieval
-    const articles = await search(c.env.DB, {
+    const articles = await search(db, {
       query: body.query,
-      gemeinde,
-      bundesland: body.bundesland,
-      landkreis: body.landkreis,
+      gemeinde_ars: gemeindeArs ?? undefined,
+      verband_ars: verbandArs ?? undefined,
+      kreis_ars: resolvedKreisArs ?? undefined,
+      land_ars: resolvedLandArs ?? undefined,
       projekt: body.projekt,
       persona,
       hints: body.hints,

@@ -10,9 +10,10 @@ export interface Env {
 export interface Article {
   id: number;
   titel: string;
-  gemeinde: string | null;
-  bundesland: string | null;   // Phase 1b: 'bw', 'by', etc.
-  landkreis: string | null;    // Phase 1b: 'goeppingen', etc.
+  land_ars: string | null;
+  kreis_ars: string | null;
+  verband_ars: string | null;
+  gemeinde_ars: string | null;
   ebene: Ebene;
   saule: Saule;
   content: string;
@@ -23,17 +24,27 @@ export interface Article {
   token_count: number | null;
 }
 
-export type Ebene = "gemeinde" | "gvv" | "kreis" | "land" | "bund";
+export type Ebene = "gemeinde" | "verband" | "kreis" | "land" | "bund";
 export type Saule = "regelungsrahmen" | "wiki" | "lokal";
 export type Persona = "buerger" | "gemeinderat" | "verwaltung" | "buergermeister";
 
 export interface Gemeinde {
+  ars: string;            // PK, 12-stellig
   slug: string;
   name: string;
-  gvv: string | null;
+  verband: string | null;
+  verband_ars: string | null;
   kreis: string;
+  kreis_ars: string;
   land: string;
+  land_ars: string;
   land_kurz: string;
+}
+
+export interface GeoAlias {
+  alias: string;
+  typ: 'bundesland' | 'landkreis' | 'gemeinde' | 'verband';
+  ars: string;
 }
 
 // --- Retrieval ---
@@ -44,10 +55,11 @@ export interface ScoredArticle extends Article {
 
 export interface QueryParams {
   query: string;
-  gemeinde?: string;            // Phase 1b: jetzt optional
-  bundesland?: string;          // Phase 1b: 'bw', 'by', etc.
-  landkreis?: string;           // Phase 1b: 'goeppingen', etc.
-  projekt?: string;             // Phase 1b: 'amtsschimmel', 'brandmeister', etc.
+  gemeinde_ars?: string;
+  kreis_ars?: string;
+  verband_ars?: string;
+  land_ars?: string;
+  projekt?: string;
   persona: Persona;
   hints?: string[];
   sources?: string[];
@@ -84,7 +96,7 @@ export interface PersonaConfig {
 
 export interface GemeindeInfo {
   name: string;
-  gvv: string | null;
+  verband: string | null;
   kreis: string;
   land: string;
 }

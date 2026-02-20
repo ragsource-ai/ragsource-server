@@ -2,7 +2,7 @@ import type { ScoredArticle, Ebene, HierarchyInfo, HierarchyConflict } from "../
 
 const EBENE_ORDER: Record<Ebene, number> = {
   gemeinde: 1,
-  gvv: 2,
+  verband: 2,
   kreis: 3,
   land: 4,
   bund: 5,
@@ -10,7 +10,7 @@ const EBENE_ORDER: Record<Ebene, number> = {
 
 /**
  * Sortiert Artikel nach Normenhierarchie:
- * Gemeinde → GVV → Kreis → Land → Bund
+ * Gemeinde → Verband → Kreis → Land → Bund
  *
  * Innerhalb derselben Ebene wird nach Score sortiert.
  */

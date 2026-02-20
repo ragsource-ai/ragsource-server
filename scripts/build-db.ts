@@ -17,15 +17,38 @@ import { execSync } from "child_process";
 
 const DB_NAME = "ragsource-db";
 
-// Gemeinden-Lookup für Auto-Resolve von bundesland/landkreis (Phase 1b)
-const GEMEINDEN_MAP: Record<string, { land_kurz: string; kreis_slug: string }> = {
-  "bad-boll":      { land_kurz: "bw", kreis_slug: "goeppingen" },
-  "aichelberg":    { land_kurz: "bw", kreis_slug: "goeppingen" },
-  "duernau":       { land_kurz: "bw", kreis_slug: "goeppingen" },
-  "gammelshausen": { land_kurz: "bw", kreis_slug: "goeppingen" },
-  "hattenhofen":   { land_kurz: "bw", kreis_slug: "goeppingen" },
-  "zell-ua":       { land_kurz: "bw", kreis_slug: "goeppingen" },
+// gemeinden.json laden (Single Source of Truth)
+const gemeindenData = JSON.parse(
+  readFileSync(join(import.meta.dirname!, "..", "data", "gemeinden.json"), "utf-8"),
+) as {
+  laender: Array<{ ars: string; name: string; kuerzel: string; aliases: string[] }>;
+  landkreise: Array<{ ars: string; name: string; land_ars: string; aliases: string[] }>;
+  verbaende: Array<{ ars: string; name: string; kreis_ars: string; aliases: string[] }>;
+  gemeinden: Array<{ ars: string; name: string; verband_ars: string; slug: string; aliases: string[] }>;
 };
+
+// Slug → ARS-Lookup aufbauen (für Frontmatter-Auflösung)
+const SLUG_TO_ARS: Record<string, {
+  ars: string;
+  verband_ars: string;
+  kreis_ars: string;
+  land_ars: string;
+}> = {};
+
+for (const g of gemeindenData.gemeinden) {
+  const verband = gemeindenData.verbaende.find(v => v.ars === g.verband_ars);
+  const kreis_ars = verband
+    ? verband.kreis_ars
+    : g.ars.substring(0, 5);
+  const land_ars = g.ars.substring(0, 2);
+
+  SLUG_TO_ARS[g.slug] = {
+    ars: g.ars,
+    verband_ars: g.verband_ars,
+    kreis_ars,
+    land_ars,
+  };
+}
 
 // Welcher Modus?
 const args = process.argv.slice(2);
@@ -126,14 +149,36 @@ for (const { file, root } of mdFilesWithRoot) {
   const tokenCount = Math.round(content.length / 4);
   const dateipfad = relative(root, file).replace(/\\/g, "/");
 
-  // Geo-Felder: aus Frontmatter oder Auto-Resolve aus GEMEINDEN_MAP
-  let bundesland: string | null = fm.bundesland || null;
-  let landkreis: string | null = fm.landkreis || null;
+  // Geo-Felder: ARS aus gemeinden.json auflösen
+  let land_ars: string | null = null;
+  let kreis_ars: string | null = null;
+  let verband_ars: string | null = null;
+  let gemeinde_ars: string | null = null;
 
-  if (fm.gemeinde && GEMEINDEN_MAP[fm.gemeinde]) {
-    const geo = GEMEINDEN_MAP[fm.gemeinde];
-    if (!bundesland) bundesland = geo.land_kurz;
-    if (!landkreis) landkreis = geo.kreis_slug;
+  if (fm.gemeinde && SLUG_TO_ARS[fm.gemeinde]) {
+    const geo = SLUG_TO_ARS[fm.gemeinde];
+    gemeinde_ars = geo.ars;
+    verband_ars = geo.verband_ars || null;
+    kreis_ars = geo.kreis_ars;
+    land_ars = geo.land_ars;
+  } else {
+    // Bundesland/Landkreis aus Frontmatter (für kreis/land-Ebene)
+    if (fm.bundesland) {
+      const land = gemeindenData.laender.find(l =>
+        l.kuerzel.toLowerCase() === fm.bundesland.toLowerCase() ||
+        l.aliases.includes(fm.bundesland.toLowerCase())
+      );
+      if (land) land_ars = land.ars;
+    }
+    if (fm.landkreis) {
+      const kreis = gemeindenData.landkreise.find(k =>
+        k.aliases.includes(fm.landkreis.toLowerCase())
+      );
+      if (kreis) {
+        kreis_ars = kreis.ars;
+        if (!land_ars) land_ars = kreis.land_ars;
+      }
+    }
   }
 
   // Wiki-Artikel ohne projekte-Feld: Warnung
@@ -142,12 +187,15 @@ for (const { file, root } of mdFilesWithRoot) {
     console.log(`  ⚠️  Warnung: Wiki-Artikel ohne projekte-Feld: ${file}`);
   }
 
-  imported++;
-  console.log(`  ✅ ${fm.titel} (${tokenCount} Tokens, bl=${bundesland || '-'}, lk=${landkreis || '-'}, proj=[${projekte.join(',')}])`);
+  // Ebene normalisieren: gvv → verband (Rückwärtskompatibilität)
+  const ebene = fm.ebene === "gvv" ? "verband" : fm.ebene;
 
-  // Article einfügen (mit bundesland + landkreis)
+  imported++;
+  console.log(`  ✅ ${fm.titel} (${tokenCount} Tokens, land=${land_ars || '-'}, kreis=${kreis_ars || '-'}, verband=${verband_ars || '-'}, gemeinde=${gemeinde_ars || '-'}, proj=[${projekte.join(',')}])`);
+
+  // Article einfügen (mit ARS-Spalten)
   statements.push(
-    `INSERT INTO articles (titel, gemeinde, bundesland, landkreis, ebene, saule, content, gueltig_ab, status, dateipfad, quelle, token_count) VALUES (${esc(fm.titel)}, ${esc(fm.gemeinde)}, ${esc(bundesland)}, ${esc(landkreis)}, ${esc(fm.ebene)}, ${esc(fm.saule)}, ${esc(content)}, ${esc(fm.gueltig_ab)}, ${esc(fm.status || "published")}, ${esc(dateipfad)}, ${esc(fm.quelle)}, ${tokenCount});`,
+    `INSERT INTO articles (titel, land_ars, kreis_ars, verband_ars, gemeinde_ars, ebene, saule, content, gueltig_ab, status, dateipfad, quelle, token_count) VALUES (${esc(fm.titel)}, ${esc(land_ars)}, ${esc(kreis_ars)}, ${esc(verband_ars)}, ${esc(gemeinde_ars)}, ${esc(ebene)}, ${esc(fm.saule)}, ${esc(content)}, ${esc(fm.gueltig_ab)}, ${esc(fm.status || "published")}, ${esc(dateipfad)}, ${esc(fm.quelle)}, ${tokenCount});`,
   );
 
   // Projekte (Junction-Tabelle)

@@ -1,0 +1,70 @@
+{
+  "laender": [
+    {
+      "ars": "08",
+      "name": "Baden-Württemberg",
+      "kuerzel": "BW",
+      "aliases": ["bw", "baden-württemberg", "badenwuerttemberg", "baden wuerttemberg", "baden württemberg", "badenwürttemberg"]
+    }
+  ],
+  "landkreise": [
+    {
+      "ars": "08117",
+      "name": "Göppingen",
+      "land_ars": "08",
+      "aliases": ["goeppingen", "göppingen", "gp", "landkreis göppingen", "landkreis goeppingen", "lkr göppingen", "lkr goeppingen"]
+    }
+  ],
+  "verbaende": [
+    {
+      "ars": "081175009",
+      "name": "GVV Raum Bad Boll",
+      "kreis_ars": "08117",
+      "aliases": ["gvv-bad-boll", "gvv bad boll", "gvv raum bad boll"]
+    }
+  ],
+  "gemeinden": [
+    {
+      "ars": "081175009012",
+      "name": "Bad Boll",
+      "verband_ars": "081175009",
+      "slug": "bad-boll",
+      "aliases": ["bad-boll", "bad boll"]
+    },
+    {
+      "ars": "081175009002",
+      "name": "Aichelberg",
+      "verband_ars": "081175009",
+      "slug": "aichelberg",
+      "aliases": ["aichelberg"]
+    },
+    {
+      "ars": "081175009017",
+      "name": "Dürnau",
+      "verband_ars": "081175009",
+      "slug": "duernau",
+      "aliases": ["duernau", "dürnau"]
+    },
+    {
+      "ars": "081175009023",
+      "name": "Gammelshausen",
+      "verband_ars": "081175009",
+      "slug": "gammelshausen",
+      "aliases": ["gammelshausen"]
+    },
+    {
+      "ars": "081175009029",
+      "name": "Hattenhofen",
+      "verband_ars": "081175009",
+      "slug": "hattenhofen",
+      "aliases": ["hattenhofen"]
+    },
+    {
+      "ars": "081175009060",
+      "name": "Zell u.A.",
+      "verband_ars": "081175009",
+      "slug": "zell-ua",
+      "aliases": ["zell-ua", "zell ua", "zell u.a.", "zell unter aichelberg"]
+    }
+  ]
+}

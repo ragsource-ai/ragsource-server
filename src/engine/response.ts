@@ -74,13 +74,13 @@ export function buildResponsePacket(
   const gemeindeInfo: GemeindeInfo = gemeinde
     ? {
         name: gemeinde.name,
-        gvv: gemeinde.gvv,
+        verband: gemeinde.verband,
         kreis: gemeinde.kreis,
         land: gemeinde.land,
       }
     : {
         name: "Alle",
-        gvv: null,
+        verband: null,
         kreis: "Alle",
         land: "Alle",
       };

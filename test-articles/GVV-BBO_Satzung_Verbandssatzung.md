@@ -1,7 +1,7 @@
 ---
 titel: Verbandssatzung des Gemeindeverwaltungsverbandes Raum Bad Boll
 gemeinde: bad-boll
-ebene: gvv
+ebene: verband
 saule: regelungsrahmen
 quelle: Vereinbarung der Mitgliedsgemeinden, Rechtsgrundlage Â§ 60 GemO i.V.m. Â§ 6 GKZ
 gueltig_ab: 2024-07-01

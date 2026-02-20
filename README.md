@@ -4,8 +4,8 @@ Cloudflare Worker mit D1-Datenbank (SQLite + FTS5), der kommunales Verwaltungswi
 
 **Live:** `https://ragsource-api.ragsource.workers.dev`
 **MCP-Endpunkt:** `https://ragsource-api.ragsource.workers.dev/mcp`
-**MCP-Version:** 1.1.0
-**Status:** Phase 1b live (Geo-Filter + Projekt-Filter)
+**MCP-Version:** 1.2.0
+**Status:** Phase 1d live (ARS-basierte Geo-Filterung)
 
 ---
 
@@ -43,6 +43,8 @@ ragsource-server/
 │       └── config.ts         # Retrieval-Konfiguration + Persona-Overrides
 ├── scripts/
 │   └── build-db.ts           # Markdown → D1 Build-Pipeline
+├── data/
+│   └── gemeinden.json        # Single Source of Truth: ARS, Klarnamen, Aliases
 ├── test-articles/            # 5 Testartikel fuer lokale Entwicklung
 ├── schema.sql                # Datenbank-Schema (FTS5 + Tabellen + Indizes)
 └── wrangler.jsonc            # Cloudflare-Konfiguration
@@ -116,9 +118,9 @@ Alle Filter sind optional. Ohne Filter werden alle publizierten Artikel durchsuc
 
 | Parameter | Typ | Beschreibung |
 |-----------|-----|--------------|
-| `gemeinde` | string | Gemeinde-Slug (z.B. `bad-boll`) |
-| `bundesland` | string | Bundesland-Kuerzel (z.B. `bw`) |
-| `landkreis` | string | Landkreis-Slug (z.B. `goeppingen`) |
+| `gemeinde` | string | Gemeinde-Slug, Klarname oder ARS (z.B. `bad-boll`, `Bad Boll`, `081175009012`). Intern via `geo_aliases` zu ARS normalisiert. Auto-Resolve: Verband/Kreis/Land werden automatisch abgeleitet |
+| `bundesland` | string | Bundesland-Kuerzel, Klarname oder ARS (z.B. `bw`, `Baden-Württemberg`, `08`) |
+| `landkreis` | string | Landkreis-Slug, Klarname oder ARS (z.B. `goeppingen`, `Göppingen`, `08117`) |
 | `projekt` | string | Projekt-Slug fuer Projekt-Filter |
 | `persona` | enum | `buerger` \| `gemeinderat` \| `verwaltung` \| `buergermeister` |
 
@@ -131,7 +133,7 @@ Artikel sind Markdown-Dateien mit YAML-Frontmatter. Sie leben in einem separaten
 ```yaml
 ---
 titel: Feuerwehrsatzung der Gemeinde Bad Boll
-ebene: gemeinde          # bund | land | kreis | gvv | gemeinde
+ebene: gemeinde          # bund | land | kreis | verband | gemeinde
 saule: regelungsrahmen
 gemeinde: bad-boll
 projekte:

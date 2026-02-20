@@ -4,11 +4,12 @@ import { z } from "zod";
 import type { Env, Persona, Gemeinde } from "./types.js";
 import { search } from "./engine/matcher.js";
 import { buildResponsePacket } from "./engine/response.js";
+import { normalizeGeoParam } from "./engine/normalize.js";
 
 export class RAGSourceMCP extends McpAgent<Env> {
   server = new McpServer({
     name: "RAGSource",
-    version: "1.1.0",
+    version: "1.2.0",
   });
 
   async init() {
@@ -60,21 +61,36 @@ export class RAGSourceMCP extends McpAgent<Env> {
         const db = this.env.DB;
         const p = persona as Persona;
 
-        // Gemeinde-Hierarchie auflösen (nur wenn gemeinde übergeben)
+        // Geo-Parameter normalisieren → ARS
+        const gemeindeArs = gemeinde ? await normalizeGeoParam(gemeinde, "gemeinde", db) : null;
+        const kreisArs = landkreis ? await normalizeGeoParam(landkreis, "landkreis", db) : null;
+        const landArs = bundesland ? await normalizeGeoParam(bundesland, "bundesland", db) : null;
+
+        // Auto-Resolve: Gemeinde → Verband/Kreis/Land
+        let verbandArs: string | null = null;
+        let resolvedKreisArs = kreisArs;
+        let resolvedLandArs = landArs;
         let gemeindeRow: Gemeinde | null = null;
-        if (gemeinde) {
+
+        if (gemeindeArs) {
           gemeindeRow = await db
-            .prepare("SELECT * FROM gemeinden WHERE slug = ?")
-            .bind(gemeinde)
+            .prepare("SELECT * FROM gemeinden WHERE ars = ?")
+            .bind(gemeindeArs)
             .first<Gemeinde>();
+          if (gemeindeRow) {
+            verbandArs = gemeindeRow.verband_ars;
+            if (!resolvedKreisArs) resolvedKreisArs = gemeindeRow.kreis_ars;
+            if (!resolvedLandArs) resolvedLandArs = gemeindeRow.land_ars;
+          }
         }
 
-        // 4-Stufen-Retrieval mit Geo- und Projekt-Filter
+        // 4-Stufen-Retrieval mit ARS-Filtern
         const articles = await search(db, {
           query,
-          gemeinde,
-          bundesland,
-          landkreis,
+          gemeinde_ars: gemeindeArs ?? undefined,
+          verband_ars: verbandArs ?? undefined,
+          kreis_ars: resolvedKreisArs ?? undefined,
+          land_ars: resolvedLandArs ?? undefined,
           projekt,
           persona: p,
           hints,
@@ -108,15 +124,15 @@ export class RAGSourceMCP extends McpAgent<Env> {
         gemeinde: z
           .string()
           .optional()
-          .describe("Gemeinde-Slug. Optional."),
+          .describe("Gemeinde-Slug, z.B. 'bad-boll'. Optional."),
         bundesland: z
           .string()
           .optional()
-          .describe("Bundesland-Kuerzel. Optional."),
+          .describe("Bundesland-Kuerzel, z.B. 'bw'. Optional."),
         landkreis: z
           .string()
           .optional()
-          .describe("Landkreis-Slug. Optional."),
+          .describe("Landkreis-Slug, z.B. 'goeppingen'. Optional."),
         projekt: z
           .string()
           .optional()
@@ -125,11 +141,34 @@ export class RAGSourceMCP extends McpAgent<Env> {
       async ({ keywords, gemeinde, bundesland, landkreis, projekt }) => {
         const db = this.env.DB;
 
+        // Geo-Parameter normalisieren → ARS
+        const gemeindeArs = gemeinde ? await normalizeGeoParam(gemeinde, "gemeinde", db) : null;
+        const kreisArs = landkreis ? await normalizeGeoParam(landkreis, "landkreis", db) : null;
+        const landArs = bundesland ? await normalizeGeoParam(bundesland, "bundesland", db) : null;
+
+        // Auto-Resolve: Gemeinde → Verband/Kreis/Land
+        let verbandArs: string | null = null;
+        let resolvedKreisArs = kreisArs;
+        let resolvedLandArs = landArs;
+
+        if (gemeindeArs) {
+          const gemeindeRow = await db
+            .prepare("SELECT * FROM gemeinden WHERE ars = ?")
+            .bind(gemeindeArs)
+            .first<Gemeinde>();
+          if (gemeindeRow) {
+            verbandArs = gemeindeRow.verband_ars;
+            if (!resolvedKreisArs) resolvedKreisArs = gemeindeRow.kreis_ars;
+            if (!resolvedLandArs) resolvedLandArs = gemeindeRow.land_ars;
+          }
+        }
+
         const articles = await search(db, {
           query: keywords,
-          gemeinde,
-          bundesland,
-          landkreis,
+          gemeinde_ars: gemeindeArs ?? undefined,
+          verband_ars: verbandArs ?? undefined,
+          kreis_ars: resolvedKreisArs ?? undefined,
+          land_ars: resolvedLandArs ?? undefined,
           projekt,
           persona: "buerger",
         });
