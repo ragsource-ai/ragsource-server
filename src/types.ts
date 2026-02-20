@@ -59,6 +59,7 @@ export interface QueryParams {
   kreis_ars?: string;
   verband_ars?: string;
   land_ars?: string;
+  geo_level?: "gemeinde" | "verband" | "kreis" | "land";
   projekt?: string;
   persona: Persona;
   hints?: string[];
@@ -70,7 +71,7 @@ export interface QueryParams {
 export interface ResponsePacket {
   articles: ArticleResult[];
   persona: PersonaConfig;
-  gemeinde: GemeindeInfo;
+  geo: GeoInfo;
   hierarchy: HierarchyInfo;
   disclaimer: string;
 }
@@ -94,11 +95,12 @@ export interface PersonaConfig {
   kontaktdaten_anzeigen: boolean;
 }
 
-export interface GemeindeInfo {
+export interface GeoInfo {
+  level: "gemeinde" | "verband" | "kreis" | "land" | "alle";
   name: string;
   verband: string | null;
-  kreis: string;
-  land: string;
+  kreis: string | null;
+  land: string | null;
 }
 
 export interface HierarchyInfo {

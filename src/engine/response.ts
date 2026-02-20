@@ -1,12 +1,12 @@
 import type {
   ScoredArticle,
-  Gemeinde,
   Persona,
   ResponsePacket,
   ArticleResult,
   PersonaConfig,
-  GemeindeInfo,
+  GeoInfo,
 } from "../types.js";
+import type { ResolvedGeo } from "./normalize.js";
 import { sortByHierarchy, detectConflicts } from "./hierarchy.js";
 import { DISCLAIMER } from "./config.js";
 
@@ -50,7 +50,7 @@ const PERSONA_CONFIGS: Record<Persona, PersonaConfig> = {
  */
 export function buildResponsePacket(
   articles: ScoredArticle[],
-  gemeinde: Gemeinde | null,
+  geo: ResolvedGeo | null,
   persona: Persona,
 ): ResponsePacket {
   // Artikel nach Hierarchie sortieren
@@ -70,25 +70,27 @@ export function buildResponsePacket(
     quelle: a.quelle,
   }));
 
-  // Gemeinde-Info
-  const gemeindeInfo: GemeindeInfo = gemeinde
+  // Geo-Info
+  const geoInfo: GeoInfo = geo
     ? {
-        name: gemeinde.name,
-        verband: gemeinde.verband,
-        kreis: gemeinde.kreis,
-        land: gemeinde.land,
+        level: geo.level,
+        name: geo.display.name,
+        verband: geo.display.verband,
+        kreis: geo.display.kreis,
+        land: geo.display.land,
       }
     : {
+        level: "alle",
         name: "Alle",
         verband: null,
-        kreis: "Alle",
-        land: "Alle",
+        kreis: null,
+        land: null,
       };
 
   return {
     articles: articleResults,
     persona: PERSONA_CONFIGS[persona],
-    gemeinde: gemeindeInfo,
+    geo: geoInfo,
     hierarchy,
     disclaimer: DISCLAIMER,
   };

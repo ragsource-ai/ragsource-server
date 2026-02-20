@@ -1,15 +1,15 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { Env, Persona, Gemeinde } from "./types.js";
+import type { Env, Persona } from "./types.js";
 import { search } from "./engine/matcher.js";
 import { buildResponsePacket } from "./engine/response.js";
-import { normalizeGeoParam } from "./engine/normalize.js";
+import { resolveGeo } from "./engine/normalize.js";
 
 export class RAGSourceMCP extends McpAgent<Env> {
   server = new McpServer({
     name: "RAGSource",
-    version: "1.2.0",
+    version: "1.3.0",
   });
 
   async init() {
@@ -26,18 +26,14 @@ export class RAGSourceMCP extends McpAgent<Env> {
           .describe(
             "Die Suchanfrage des Nutzers in natuerlicher Sprache",
           ),
-        gemeinde: z
+        geo: z
           .string()
           .optional()
-          .describe("Gemeinde-Slug, z.B. 'bad-boll'. Optional."),
-        bundesland: z
-          .string()
-          .optional()
-          .describe("Bundesland-Kuerzel, z.B. 'bw'. Optional."),
-        landkreis: z
-          .string()
-          .optional()
-          .describe("Landkreis-Slug, z.B. 'goeppingen'. Optional."),
+          .describe(
+            "Geo-Filter: ARS-Code (2/5/9/12 Stellen) oder Klarname. " +
+            "2-stellig=Land, 5-stellig=Kreis, 9-stellig=Verband, 12-stellig=Gemeinde. " +
+            "Beispiele: '08', '08117', '081175009', '081175009012', 'Bad Boll'",
+          ),
         projekt: z
           .string()
           .optional()
@@ -57,40 +53,21 @@ export class RAGSourceMCP extends McpAgent<Env> {
           .optional()
           .describe("Optionale vermutete Dokumenttitel"),
       },
-      async ({ query, gemeinde, bundesland, landkreis, projekt, persona, hints, sources }) => {
+      async ({ query, geo: geoInput, projekt, persona, hints, sources }) => {
         const db = this.env.DB;
         const p = persona as Persona;
 
-        // Geo-Parameter normalisieren → ARS
-        const gemeindeArs = gemeinde ? await normalizeGeoParam(gemeinde, "gemeinde", db) : null;
-        const kreisArs = landkreis ? await normalizeGeoParam(landkreis, "landkreis", db) : null;
-        const landArs = bundesland ? await normalizeGeoParam(bundesland, "bundesland", db) : null;
-
-        // Auto-Resolve: Gemeinde → Verband/Kreis/Land
-        let verbandArs: string | null = null;
-        let resolvedKreisArs = kreisArs;
-        let resolvedLandArs = landArs;
-        let gemeindeRow: Gemeinde | null = null;
-
-        if (gemeindeArs) {
-          gemeindeRow = await db
-            .prepare("SELECT * FROM gemeinden WHERE ars = ?")
-            .bind(gemeindeArs)
-            .first<Gemeinde>();
-          if (gemeindeRow) {
-            verbandArs = gemeindeRow.verband_ars;
-            if (!resolvedKreisArs) resolvedKreisArs = gemeindeRow.kreis_ars;
-            if (!resolvedLandArs) resolvedLandArs = gemeindeRow.land_ars;
-          }
-        }
+        // Geo-Auflösung: 1 Parameter → ARS + Level
+        const geo = geoInput ? await resolveGeo(geoInput, db) : null;
 
         // 4-Stufen-Retrieval mit ARS-Filtern
         const articles = await search(db, {
           query,
-          gemeinde_ars: gemeindeArs ?? undefined,
-          verband_ars: verbandArs ?? undefined,
-          kreis_ars: resolvedKreisArs ?? undefined,
-          land_ars: resolvedLandArs ?? undefined,
+          gemeinde_ars: geo?.gemeinde_ars ?? undefined,
+          verband_ars: geo?.verband_ars ?? undefined,
+          kreis_ars: geo?.kreis_ars ?? undefined,
+          land_ars: geo?.land_ars ?? undefined,
+          geo_level: geo?.level,
           projekt,
           persona: p,
           hints,
@@ -98,7 +75,7 @@ export class RAGSourceMCP extends McpAgent<Env> {
         });
 
         // Response-Paket bauen
-        const packet = buildResponsePacket(articles, gemeindeRow, p);
+        const packet = buildResponsePacket(articles, geo, p);
 
         return {
           content: [
@@ -121,54 +98,31 @@ export class RAGSourceMCP extends McpAgent<Env> {
         keywords: z
           .string()
           .describe("Suchbegriffe, Leerzeichen-getrennt"),
-        gemeinde: z
+        geo: z
           .string()
           .optional()
-          .describe("Gemeinde-Slug, z.B. 'bad-boll'. Optional."),
-        bundesland: z
-          .string()
-          .optional()
-          .describe("Bundesland-Kuerzel, z.B. 'bw'. Optional."),
-        landkreis: z
-          .string()
-          .optional()
-          .describe("Landkreis-Slug, z.B. 'goeppingen'. Optional."),
+          .describe(
+            "Geo-Filter: ARS-Code (2/5/9/12 Stellen) oder Klarname. " +
+            "Beispiele: '08', '08117', '081175009', '081175009012', 'Bad Boll'",
+          ),
         projekt: z
           .string()
           .optional()
           .describe("Projekt-Slug. Optional."),
       },
-      async ({ keywords, gemeinde, bundesland, landkreis, projekt }) => {
+      async ({ keywords, geo: geoInput, projekt }) => {
         const db = this.env.DB;
 
-        // Geo-Parameter normalisieren → ARS
-        const gemeindeArs = gemeinde ? await normalizeGeoParam(gemeinde, "gemeinde", db) : null;
-        const kreisArs = landkreis ? await normalizeGeoParam(landkreis, "landkreis", db) : null;
-        const landArs = bundesland ? await normalizeGeoParam(bundesland, "bundesland", db) : null;
-
-        // Auto-Resolve: Gemeinde → Verband/Kreis/Land
-        let verbandArs: string | null = null;
-        let resolvedKreisArs = kreisArs;
-        let resolvedLandArs = landArs;
-
-        if (gemeindeArs) {
-          const gemeindeRow = await db
-            .prepare("SELECT * FROM gemeinden WHERE ars = ?")
-            .bind(gemeindeArs)
-            .first<Gemeinde>();
-          if (gemeindeRow) {
-            verbandArs = gemeindeRow.verband_ars;
-            if (!resolvedKreisArs) resolvedKreisArs = gemeindeRow.kreis_ars;
-            if (!resolvedLandArs) resolvedLandArs = gemeindeRow.land_ars;
-          }
-        }
+        // Geo-Auflösung: 1 Parameter → ARS + Level
+        const geo = geoInput ? await resolveGeo(geoInput, db) : null;
 
         const articles = await search(db, {
           query: keywords,
-          gemeinde_ars: gemeindeArs ?? undefined,
-          verband_ars: verbandArs ?? undefined,
-          kreis_ars: resolvedKreisArs ?? undefined,
-          land_ars: resolvedLandArs ?? undefined,
+          gemeinde_ars: geo?.gemeinde_ars ?? undefined,
+          verband_ars: geo?.verband_ars ?? undefined,
+          kreis_ars: geo?.kreis_ars ?? undefined,
+          land_ars: geo?.land_ars ?? undefined,
+          geo_level: geo?.level,
           projekt,
           persona: "buerger",
         });

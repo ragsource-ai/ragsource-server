@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import type { Env, Persona, Gemeinde } from "./types.js";
+import type { Env, Persona } from "./types.js";
 import { search } from "./engine/matcher.js";
 import { buildResponsePacket } from "./engine/response.js";
-import { normalizeGeoParam } from "./engine/normalize.js";
+import { resolveGeo } from "./engine/normalize.js";
 
 type HonoEnv = { Bindings: Env };
 
@@ -20,7 +20,7 @@ export function createApp() {
     return c.json({
       status: "ok",
       articles_count: result?.count ?? 0,
-      version: "1.2.0",
+      version: "1.3.0",
     });
   });
 
@@ -30,38 +30,18 @@ export function createApp() {
     if (!q) return c.json({ error: "Parameter 'q' fehlt" }, 400);
 
     const db = c.env.DB;
-    const gemeinde = c.req.query("gemeinde") || undefined;
-    const bundesland = c.req.query("bundesland") || undefined;
-    const landkreis = c.req.query("landkreis") || undefined;
+    const geoInput = c.req.query("geo") || undefined;
 
-    // Geo-Parameter normalisieren → ARS
-    const gemeindeArs = gemeinde ? await normalizeGeoParam(gemeinde, "gemeinde", db) : null;
-    const kreisArs = landkreis ? await normalizeGeoParam(landkreis, "landkreis", db) : null;
-    const landArs = bundesland ? await normalizeGeoParam(bundesland, "bundesland", db) : null;
-
-    // Auto-Resolve: Gemeinde → Verband/Kreis/Land
-    let verbandArs: string | null = null;
-    let resolvedKreisArs = kreisArs;
-    let resolvedLandArs = landArs;
-
-    if (gemeindeArs) {
-      const gemeindeRow = await db
-        .prepare("SELECT * FROM gemeinden WHERE ars = ?")
-        .bind(gemeindeArs)
-        .first<Gemeinde>();
-      if (gemeindeRow) {
-        verbandArs = gemeindeRow.verband_ars;
-        if (!resolvedKreisArs) resolvedKreisArs = gemeindeRow.kreis_ars;
-        if (!resolvedLandArs) resolvedLandArs = gemeindeRow.land_ars;
-      }
-    }
+    // Geo-Auflösung: 1 Parameter → ARS + Level
+    const geo = geoInput ? await resolveGeo(geoInput, db) : null;
 
     const results = await search(db, {
       query: q,
-      gemeinde_ars: gemeindeArs ?? undefined,
-      verband_ars: verbandArs ?? undefined,
-      kreis_ars: resolvedKreisArs ?? undefined,
-      land_ars: resolvedLandArs ?? undefined,
+      gemeinde_ars: geo?.gemeinde_ars ?? undefined,
+      verband_ars: geo?.verband_ars ?? undefined,
+      kreis_ars: geo?.kreis_ars ?? undefined,
+      land_ars: geo?.land_ars ?? undefined,
+      geo_level: geo?.level,
       projekt: c.req.query("projekt") || undefined,
       persona: "buerger",
     });
@@ -96,9 +76,7 @@ export function createApp() {
   app.post("/api/query", async (c) => {
     const body = await c.req.json<{
       query: string;
-      gemeinde?: string;
-      bundesland?: string;
-      landkreis?: string;
+      geo?: string;
       projekt?: string;
       persona?: Persona;
       hints?: string[];
@@ -110,36 +88,17 @@ export function createApp() {
     const db = c.env.DB;
     const persona = body.persona || "buerger";
 
-    // Geo-Parameter normalisieren → ARS
-    const gemeindeArs = body.gemeinde ? await normalizeGeoParam(body.gemeinde, "gemeinde", db) : null;
-    const kreisArs = body.landkreis ? await normalizeGeoParam(body.landkreis, "landkreis", db) : null;
-    const landArs = body.bundesland ? await normalizeGeoParam(body.bundesland, "bundesland", db) : null;
-
-    // Auto-Resolve: Gemeinde → Verband/Kreis/Land
-    let verbandArs: string | null = null;
-    let resolvedKreisArs = kreisArs;
-    let resolvedLandArs = landArs;
-    let gemeindeRow: Gemeinde | null = null;
-
-    if (gemeindeArs) {
-      gemeindeRow = await db
-        .prepare("SELECT * FROM gemeinden WHERE ars = ?")
-        .bind(gemeindeArs)
-        .first<Gemeinde>();
-      if (gemeindeRow) {
-        verbandArs = gemeindeRow.verband_ars;
-        if (!resolvedKreisArs) resolvedKreisArs = gemeindeRow.kreis_ars;
-        if (!resolvedLandArs) resolvedLandArs = gemeindeRow.land_ars;
-      }
-    }
+    // Geo-Auflösung: 1 Parameter → ARS + Level
+    const geo = body.geo ? await resolveGeo(body.geo, db) : null;
 
     // Retrieval
     const articles = await search(db, {
       query: body.query,
-      gemeinde_ars: gemeindeArs ?? undefined,
-      verband_ars: verbandArs ?? undefined,
-      kreis_ars: resolvedKreisArs ?? undefined,
-      land_ars: resolvedLandArs ?? undefined,
+      gemeinde_ars: geo?.gemeinde_ars ?? undefined,
+      verband_ars: geo?.verband_ars ?? undefined,
+      kreis_ars: geo?.kreis_ars ?? undefined,
+      land_ars: geo?.land_ars ?? undefined,
+      geo_level: geo?.level,
       projekt: body.projekt,
       persona,
       hints: body.hints,
@@ -147,7 +106,7 @@ export function createApp() {
     });
 
     // Response-Paket bauen
-    const packet = buildResponsePacket(articles, gemeindeRow, persona);
+    const packet = buildResponsePacket(articles, geo, persona);
     return c.json(packet);
   });
 

@@ -25,6 +25,16 @@ function buildGeoProjectFilter(params: QueryParams): FilterResult {
   const conditions: string[] = ["a.status = 'published'"];
   const bindParams: any[] = [];
 
+  // --- Ebene-Einschränkung: "nur aufwärts" ---
+  // Verband-Level zeigt nur Verband + Kreis + Land + Bund (keine Gemeinde-Artikel)
+  if (params.geo_level === "verband") {
+    conditions.push("a.ebene IN ('bund', 'land', 'kreis', 'verband')");
+  } else if (params.geo_level === "kreis") {
+    conditions.push("a.ebene IN ('bund', 'land', 'kreis')");
+  } else if (params.geo_level === "land") {
+    conditions.push("a.ebene IN ('bund', 'land')");
+  }
+
   // --- Geo-Filter (unabhängig, kaskadierend, ARS-basiert) ---
 
   if (params.gemeinde_ars) {
