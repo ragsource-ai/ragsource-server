@@ -1,9 +1,9 @@
 ---
 titel: "FwG BW â€“ Erster Teil: Allgemeines und Aufgaben der TrÃ¤ger (Â§Â§ 1-5)"
-gemeinde: null
-bundesland: bw
 ebene: land
 saule: regelungsrahmen
+land_ars: "08"
+land: Baden-Württemberg
 projekte:
   - amtsschimmel
   - brandmeister

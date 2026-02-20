@@ -1,8 +1,13 @@
 ---
 titel: Verbandssatzung des Gemeindeverwaltungsverbandes Raum Bad Boll
-gemeinde: bad-boll
 ebene: verband
 saule: regelungsrahmen
+land_ars: "08"
+kreis_ars: "08117"
+verband_ars: "081175009"
+land: Baden-Württemberg
+kreis: Göppingen
+verband: GVV Raum Bad Boll
 quelle: Vereinbarung der Mitgliedsgemeinden, Rechtsgrundlage Â§ 60 GemO i.V.m. Â§ 6 GKZ
 gueltig_ab: 2024-07-01
 status: published

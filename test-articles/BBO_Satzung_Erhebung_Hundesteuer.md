@@ -1,8 +1,15 @@
 ---
 titel: Satzung Ã¼ber die Erhebung der Hundesteuer (Hundesteuersatzung)
-gemeinde: bad-boll
 ebene: gemeinde
 saule: regelungsrahmen
+land_ars: "08"
+kreis_ars: "08117"
+verband_ars: "081175009"
+gemeinde_ars: "081175009012"
+land: Baden-Württemberg
+kreis: Göppingen
+verband: GVV Raum Bad Boll
+gemeinde: Bad Boll
 projekte:
   - amtsschimmel
 quelle: Gemeinderatsbeschluss vom 07.12.2023, geÃ¤ndert durch Satzung vom 14.11.2024

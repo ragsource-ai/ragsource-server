@@ -1,8 +1,15 @@
 ---
 titel: Feuerwehrsatzung der Gemeinde Bad Boll
-gemeinde: bad-boll
 ebene: gemeinde
 saule: regelungsrahmen
+land_ars: "08"
+kreis_ars: "08117"
+verband_ars: "081175009"
+gemeinde_ars: "081175009012"
+land: Baden-Württemberg
+kreis: Göppingen
+verband: GVV Raum Bad Boll
+gemeinde: Bad Boll
 projekte:
   - amtsschimmel
   - brandmeister
