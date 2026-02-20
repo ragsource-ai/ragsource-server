@@ -17,7 +17,7 @@ import { execSync } from "child_process";
 
 const DB_NAME = "ragsource-db";
 
-// gemeinden.json laden (Single Source of Truth)
+// gemeinden.json laden (für QA-Validierung)
 const gemeindenData = JSON.parse(
   readFileSync(join(import.meta.dirname!, "..", "data", "gemeinden.json"), "utf-8"),
 ) as {
@@ -27,28 +27,12 @@ const gemeindenData = JSON.parse(
   gemeinden: Array<{ ars: string; name: string; verband_ars: string; slug: string; aliases: string[] }>;
 };
 
-// Slug → ARS-Lookup aufbauen (für Frontmatter-Auflösung)
-const SLUG_TO_ARS: Record<string, {
-  ars: string;
-  verband_ars: string;
-  kreis_ars: string;
-  land_ars: string;
-}> = {};
-
-for (const g of gemeindenData.gemeinden) {
-  const verband = gemeindenData.verbaende.find(v => v.ars === g.verband_ars);
-  const kreis_ars = verband
-    ? verband.kreis_ars
-    : g.ars.substring(0, 5);
-  const land_ars = g.ars.substring(0, 2);
-
-  SLUG_TO_ARS[g.slug] = {
-    ars: g.ars,
-    verband_ars: g.verband_ars,
-    kreis_ars,
-    land_ars,
-  };
-}
+// QA-Lookup: ARS → Name (für Klartext-Validierung)
+const ARS_TO_NAME = new Map<string, string>();
+for (const l of gemeindenData.laender) ARS_TO_NAME.set(l.ars, l.name);
+for (const k of gemeindenData.landkreise) ARS_TO_NAME.set(k.ars, k.name);
+for (const v of gemeindenData.verbaende) ARS_TO_NAME.set(v.ars, v.name);
+for (const g of gemeindenData.gemeinden) ARS_TO_NAME.set(g.ars, g.name);
 
 // Welcher Modus?
 const args = process.argv.slice(2);
@@ -192,36 +176,31 @@ for (const { file, root } of mdFilesWithRoot) {
   const tokenCount = Math.round(content.length / 4);
   const dateipfad = relative(root, file).replace(/\\/g, "/");
 
-  // Geo-Felder: ARS aus gemeinden.json auflösen
-  let land_ars: string | null = null;
-  let kreis_ars: string | null = null;
-  let verband_ars: string | null = null;
-  let gemeinde_ars: string | null = null;
+  // Geo-Felder: direkt aus Frontmatter (ARS = Wahrheit seit Migration)
+  const land_ars: string | null = fm.land_ars || null;
+  const kreis_ars: string | null = fm.kreis_ars || null;
+  const verband_ars: string | null = fm.verband_ars || null;
+  const gemeinde_ars: string | null = fm.gemeinde_ars || null;
 
-  if (fm.gemeinde && SLUG_TO_ARS[fm.gemeinde]) {
-    const geo = SLUG_TO_ARS[fm.gemeinde];
-    gemeinde_ars = geo.ars;
-    verband_ars = geo.verband_ars || null;
-    kreis_ars = geo.kreis_ars;
-    land_ars = geo.land_ars;
-  } else {
-    // Bundesland/Landkreis aus Frontmatter (für kreis/land-Ebene)
-    if (fm.bundesland) {
-      const land = gemeindenData.laender.find(l =>
-        l.kuerzel.toLowerCase() === fm.bundesland.toLowerCase() ||
-        l.aliases.includes(fm.bundesland.toLowerCase())
-      );
-      if (land) land_ars = land.ars;
-    }
-    if (fm.landkreis) {
-      const kreis = gemeindenData.landkreise.find(k =>
-        k.aliases.includes(fm.landkreis.toLowerCase())
-      );
-      if (kreis) {
-        kreis_ars = kreis.ars;
-        if (!land_ars) land_ars = kreis.land_ars;
-      }
-    }
+  // QA-Validierung: ARS gegen gemeinden.json prüfen
+  if (gemeinde_ars && !ARS_TO_NAME.has(gemeinde_ars)) {
+    console.log(`  ⚠️  QA: gemeinde_ars "${gemeinde_ars}" nicht in gemeinden.json: ${file}`);
+  }
+  if (verband_ars && !ARS_TO_NAME.has(verband_ars)) {
+    console.log(`  ⚠️  QA: verband_ars "${verband_ars}" nicht in gemeinden.json: ${file}`);
+  }
+  if (kreis_ars && !ARS_TO_NAME.has(kreis_ars)) {
+    console.log(`  ⚠️  QA: kreis_ars "${kreis_ars}" nicht in gemeinden.json: ${file}`);
+  }
+  if (land_ars && !ARS_TO_NAME.has(land_ars)) {
+    console.log(`  ⚠️  QA: land_ars "${land_ars}" nicht in gemeinden.json: ${file}`);
+  }
+  // Konsistenz-Check: ARS-Hierarchie passt zusammen?
+  if (gemeinde_ars && kreis_ars && !gemeinde_ars.startsWith(kreis_ars)) {
+    console.log(`  ⚠️  QA: gemeinde_ars "${gemeinde_ars}" passt nicht zu kreis_ars "${kreis_ars}": ${file}`);
+  }
+  if (kreis_ars && land_ars && !kreis_ars.startsWith(land_ars)) {
+    console.log(`  ⚠️  QA: kreis_ars "${kreis_ars}" passt nicht zu land_ars "${land_ars}": ${file}`);
   }
 
   // Wiki-Artikel ohne projekte-Feld: Warnung
