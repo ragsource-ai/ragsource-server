@@ -8,29 +8,32 @@ export interface RetrievalConfig {
 }
 
 const DEFAULT_CONFIG: RetrievalConfig = {
-  min_score: 0.2,
+  min_score: 0.15,
   max_articles: 5,
-  token_budget: 15000,
-  score_gap_threshold: 0.3,
+  token_budget: 20000,
+  score_gap_threshold: 0.6,
 };
 
+// Retrieval-Filter sind für alle Personas gleich.
+// Der Unterschied liegt im Antwort-Prompt (Sprache, Format, Detailtiefe).
 const PERSONA_OVERRIDES: Record<Persona, Partial<RetrievalConfig>> = {
-  buerger: { min_score: 0.3, token_budget: 10000, max_articles: 3 },
-  gemeinderat: { min_score: 0.2, token_budget: 15000, max_articles: 4 },
-  verwaltung: { min_score: 0.15, token_budget: 20000, max_articles: 5 },
-  buergermeister: { min_score: 0.15, token_budget: 20000, max_articles: 5 },
+  buerger: { max_articles: 3, token_budget: 10000 },
+  gemeinderat: { max_articles: 4, token_budget: 15000 },
+  verwaltung: {},
+  buergermeister: {},
 };
 
 export function getRetrievalConfig(persona: Persona): RetrievalConfig {
   return { ...DEFAULT_CONFIG, ...PERSONA_OVERRIDES[persona] };
 }
 
-// Score-Gewichtung für die 4 Retrieval-Stufen
+// Score-Gewichtung für die 5 Retrieval-Stufen
 export const SCORE_WEIGHTS = {
-  content: 0.3,    // Stufe 1: FTS5 über Titel + Content
-  question: 0.4,   // Stufe 2: FTS5 über Fragen (höchste Gewichtung)
+  content: 0.35,   // Stufe 1: FTS5 über Titel + Content
+  question: 0.2,   // Stufe 2: FTS5 über Fragen
+  keyword: 0.2,    // Stufe 3: FTS5 über Keywords (aus Frontmatter)
   hints: 0.15,     // Stufe 4: FTS5 über LLM-Hints
-  title: 0.15,     // Stufe 5: Titel-Match über LLM-Sources
+  title: 0.1,      // Stufe 5: Titel-Match über LLM-Sources
 };
 
 export const DISCLAIMER =

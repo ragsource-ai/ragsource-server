@@ -5,6 +5,7 @@ interface CandidateScores {
   [articleId: number]: {
     content: number;
     question: number;
+    keyword: number;
     hints: number;
     title: number;
   };
@@ -97,12 +98,13 @@ function buildGeoProjectFilter(params: QueryParams): FilterResult {
 }
 
 /**
- * 4-Stufen-Retrieval (mit Geo- und Projekt-Filtern)
+ * 5-Stufen-Retrieval (mit Geo- und Projekt-Filtern)
  *
- * Stufe 1: FTS5 über articles_fts (Titel + Content)
- * Stufe 2: FTS5 über questions_fts (typische Fragen)
- * Stufe 4: FTS5 über articles_fts mit LLM-Hints
- * Stufe 5: Titel-Match über LLM-Sources
+ * Stufe 1: FTS5 über articles_fts (Titel + Content)       — 0.35
+ * Stufe 2: FTS5 über questions_fts (typische Fragen)       — 0.20
+ * Stufe 3: FTS5 über keywords_fts (Frontmatter-Keywords)   — 0.20
+ * Stufe 4: FTS5 über articles_fts mit LLM-Hints            — 0.15
+ * Stufe 5: Titel-Match über LLM-Sources                    — 0.10
  */
 export async function search(
   db: D1Database,
@@ -139,7 +141,7 @@ export async function search(
       for (const row of results.results as any[]) {
         const id = row.id as number;
         if (!candidates[id])
-          candidates[id] = { content: 0, question: 0, hints: 0, title: 0 };
+          candidates[id] = { content: 0, question: 0, keyword: 0, hints: 0, title: 0 };
         // bm25 gibt negative Werte, je negativer desto besser
         candidates[id].content = Math.abs(row.rank as number) / maxRank;
       }
@@ -169,9 +171,41 @@ export async function search(
       for (const row of qResults.results as any[]) {
         const id = row.article_id as number;
         if (!candidates[id])
-          candidates[id] = { content: 0, question: 0, hints: 0, title: 0 };
+          candidates[id] = { content: 0, question: 0, keyword: 0, hints: 0, title: 0 };
         candidates[id].question = Math.max(
           candidates[id].question,
+          Math.abs(row.rank as number) / maxRank,
+        );
+      }
+    }
+  }
+
+  // --- Stufe 3: FTS5 über Keywords (aus Frontmatter) ---
+  if (ftsQuery) {
+    const kwResults = await db
+      .prepare(
+        `SELECT k.article_id, bm25(keywords_fts) AS rank
+       FROM keywords_fts
+       JOIN keywords k ON keywords_fts.rowid = k.id
+       JOIN articles a ON k.article_id = a.id
+       WHERE keywords_fts MATCH ?
+         AND ${filter.sql}
+       LIMIT 20`,
+      )
+      .bind(ftsQuery, ...filter.params)
+      .all();
+
+    if (kwResults.results) {
+      const maxRank = Math.max(
+        ...kwResults.results.map((r: any) => Math.abs(r.rank as number)),
+        1,
+      );
+      for (const row of kwResults.results as any[]) {
+        const id = row.article_id as number;
+        if (!candidates[id])
+          candidates[id] = { content: 0, question: 0, keyword: 0, hints: 0, title: 0 };
+        candidates[id].keyword = Math.max(
+          candidates[id].keyword,
           Math.abs(row.rank as number) / maxRank,
         );
       }
@@ -202,7 +236,7 @@ export async function search(
         for (const row of hResults.results as any[]) {
           const id = row.id as number;
           if (!candidates[id])
-            candidates[id] = { content: 0, question: 0, hints: 0, title: 0 };
+            candidates[id] = { content: 0, question: 0, keyword: 0, hints: 0, title: 0 };
           candidates[id].hints = Math.max(
             candidates[id].hints,
             Math.abs(row.rank as number) / maxRank,
@@ -229,7 +263,7 @@ export async function search(
         for (const row of tResults.results as any[]) {
           const id = row.id as number;
           if (!candidates[id])
-            candidates[id] = { content: 0, question: 0, hints: 0, title: 0 };
+            candidates[id] = { content: 0, question: 0, keyword: 0, hints: 0, title: 0 };
           candidates[id].title = 1.0;
         }
       }
@@ -257,6 +291,7 @@ export async function search(
       const combined =
         scores.content * SCORE_WEIGHTS.content +
         scores.question * SCORE_WEIGHTS.question +
+        scores.keyword * SCORE_WEIGHTS.keyword +
         scores.hints * SCORE_WEIGHTS.hints +
         scores.title * SCORE_WEIGHTS.title;
 
