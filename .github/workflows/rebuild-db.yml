@@ -22,6 +22,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ragsource-ai/ragsource-content
+          token: ${{ secrets.CONTENT_PAT }}
           path: ragsource-content
 
       # Zukünftig: weitere Content-Repos hier ergänzen
