@@ -1,0 +1,36 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ragsource-api-v2",
+  "main": "src/index-v2.ts",
+  "compatibility_date": "2025-04-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ragsource-db-v2",
+      // TODO: database_id nach `wrangler d1 create ragsource-db-v2` eintragen
+      "database_id": "PLACEHOLDER_REPLACE_AFTER_D1_CREATE"
+    }
+  ],
+
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "RAGSourceMCPv2",
+        "name": "MCP_OBJECT"
+      }
+    ]
+  },
+
+  "migrations": [
+    {
+      "new_sqlite_classes": ["RAGSourceMCPv2"],
+      "tag": "v1"
+    }
+  ],
+
+  "observability": {
+    "enabled": true
+  }
+}

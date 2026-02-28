@@ -9,7 +9,13 @@
     "db:init:local": "wrangler d1 execute ragsource-db --local --file=schema.sql",
     "db:init:remote": "wrangler d1 execute ragsource-db --remote --file=schema.sql",
     "db:seed:local": "tsx scripts/build-db.ts --local",
-    "db:seed:remote": "tsx scripts/build-db.ts --remote"
+    "db:seed:remote": "tsx scripts/build-db.ts --remote",
+    "dev:v2": "wrangler dev --config=wrangler-v2.jsonc",
+    "deploy:v2": "wrangler deploy --config=wrangler-v2.jsonc",
+    "db:init:local:v2": "wrangler d1 execute ragsource-db-v2 --local --config=wrangler-v2.jsonc --file=schema-v2.sql",
+    "db:init:remote:v2": "wrangler d1 execute ragsource-db-v2 --remote --config=wrangler-v2.jsonc --file=schema-v2.sql",
+    "db:seed:local:v2": "tsx scripts/build-db-v2.ts --local",
+    "db:seed:remote:v2": "tsx scripts/build-db-v2.ts --remote"
   },
   "dependencies": {
     "agents": "^0.0.74",
