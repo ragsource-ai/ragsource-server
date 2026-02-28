@@ -9,8 +9,7 @@
     {
       "binding": "DB",
       "database_name": "ragsource-db-v2",
-      // TODO: database_id nach `wrangler d1 create ragsource-db-v2` eintragen
-      "database_id": "PLACEHOLDER_REPLACE_AFTER_D1_CREATE"
+      "database_id": "55d4deda-60c5-4b70-a6d1-2b76f43e5715"
     }
   ],
 
