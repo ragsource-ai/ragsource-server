@@ -271,25 +271,39 @@ const totalStatements = articleGroups.reduce((sum, g) => sum + g.length, 0) + ta
 console.log(`\n📊 ${imported} Artikel importiert`);
 console.log(`📝 ${totalStatements} SQL-Statements generiert`);
 
-// SQL in Batches aufteilen — Artikelgrenzen respektieren
+// SQL in Batches aufteilen — Artikelgrenzen respektieren UND Byte-Limit einhalten
 // (Nie einen Artikel über zwei Batches splitten, da child-Inserts
 //  via SELECT MAX(id) auf den Parent angewiesen sind)
-const BATCH_SIZE = 100;
+// D1 Remote API hat ein Limit für SQL-Datei-Größe — wir bleiben deutlich darunter.
+const BATCH_SIZE = 100;            // Max. Statements pro Batch (Statement-Grenze)
+const BATCH_MAX_BYTES = 4_000_000; // Max. ~4 MB pro Batch-Datei (Byte-Grenze)
 const batches: string[][] = [];
 let currentBatch: string[] = [];
+let currentBatchBytes = 0;
 
 for (const group of articleGroups) {
-  // Wenn der aktuelle Batch + diese Gruppe > BATCH_SIZE wäre, neuen Batch starten
+  const groupBytes = group.reduce((sum, s) => sum + Buffer.byteLength(s, "utf8"), 0);
+  // Neuen Batch starten wenn Statement- oder Byte-Limit überschritten würde
   // (außer der Batch ist noch leer — dann passt die Gruppe immer rein)
-  if (currentBatch.length > 0 && currentBatch.length + group.length > BATCH_SIZE) {
+  if (
+    currentBatch.length > 0 &&
+    (currentBatch.length + group.length > BATCH_SIZE ||
+      currentBatchBytes + groupBytes > BATCH_MAX_BYTES)
+  ) {
     batches.push(currentBatch);
     currentBatch = [];
+    currentBatchBytes = 0;
   }
   currentBatch.push(...group);
+  currentBatchBytes += groupBytes;
 }
 
 // Tail-Statements (FTS-Rebuild) an letzten Batch anhängen oder neuen erstellen
-if (currentBatch.length + tailStatements.length > BATCH_SIZE) {
+const tailBytes = tailStatements.reduce((sum, s) => sum + Buffer.byteLength(s, "utf8"), 0);
+if (
+  currentBatch.length + tailStatements.length > BATCH_SIZE ||
+  currentBatchBytes + tailBytes > BATCH_MAX_BYTES
+) {
   batches.push(currentBatch);
   batches.push(tailStatements);
 } else {
@@ -297,7 +311,7 @@ if (currentBatch.length + tailStatements.length > BATCH_SIZE) {
   batches.push(currentBatch);
 }
 
-console.log(`\n🚀 Führe SQL aus (${mode}) in ${batches.length} Batches à max. ${BATCH_SIZE} Statements...`);
+console.log(`\n🚀 Führe SQL aus (${mode}) in ${batches.length} Batches (max. ${BATCH_SIZE} Statements / ${BATCH_MAX_BYTES / 1_000_000} MB pro Batch)...`);
 
 const sqlFile = join(import.meta.dirname!, "..", ".build-seed.sql");
 
