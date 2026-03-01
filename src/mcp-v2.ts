@@ -9,6 +9,7 @@
  */
 
 import { McpAgent } from "agents/mcp";
+import { getCurrentAgent } from "agents";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type {
@@ -166,16 +167,191 @@ function buildFtsQuery(input: string): string | null {
 }
 
 // -----------------------------------------------------------------------
+// Masterprompts (werden bei MCP-Initialize automatisch als instructions injiziert)
+// -----------------------------------------------------------------------
+
+/** Generischer RAGSource-Masterprompt (Fallback wenn kein Projekt erkannt) */
+const MASTERPROMPT_DEFAULT = `\
+Du arbeitest mit der RAGSource-Wissensdatenbank für kommunales und überörtliches Recht in Deutschland.
+
+Dir stehen vier Tools zur Verfügung:
+- RAGSource_catalog  → Verzeichnis aller verfügbaren Rechtsquellen (Gesetze, Satzungen, Verordnungen)
+- RAGSource_toc      → Inhaltsverzeichnisse einzelner Quellen (max. 5 gleichzeitig)
+- RAGSource_get      → Originalwortlaut einzelner Paragraphen (max. 15 §§ pro Aufruf)
+- RAGSource_query    → FTS5-Volltextsuche über alle Paragraphen (Fallback)
+
+PFLICHT-WORKFLOW bei jeder rechtlichen Frage:
+1. RAGSource_catalog aufrufen (geo-Parameter setzen, z.B. geo="08117" für Kreis oder geo="081175009012" für Gemeinde)
+2. 2–6 relevante Quellen anhand id, titel, typ, ebene, beschreibung identifizieren
+3. RAGSource_toc für medium/large-Quellen aufrufen → relevante §§ identifizieren
+4. RAGSource_get mit gezielten §§ aufrufen (small-Quellen: direkt ohne TOC)
+5. Antwort ausschließlich auf Basis des geladenen Originalwortlauts formulieren
+
+Routing-Regel: size_class='small' → RAGSource_get direkt | 'medium'/'large' → zuerst RAGSource_toc
+Fallback: RAGSource_query wenn der Catalog-Flow nicht weiterhilft
+
+ZITIERREGELN:
+- Paragraphen exakt benennen: "§ 18 Abs. 1 KAG BW"
+- Wenn quelle_url vorhanden: als Markdown-Link formatieren — [§ 3 KAG BW](url)
+- Wörtliche Zitate in Anführungszeichen mit Quellenangabe
+- Am Ende der Antwort Quellenübersicht anfügen
+- Source-IDs niemals erfinden — immer wörtlich aus aktuellem Catalog-Ergebnis übernehmen
+
+FEHLERBEHANDLUNG:
+Meldet RAGSource_get "nicht gefunden": RAGSource_catalog erneut aufrufen, ID verifizieren, Aufruf wiederholen.
+Niemals nach erstem Fehler aufgeben, wenn die Quelle laut Catalog existiert.`;
+
+/** Persona-Beschreibung für den TON & PERSONA-Block (URL-Parameter ?rolle=) */
+const PERSONA_BESCHREIBUNG: Record<string, string> = {
+  "verwaltung":      "Für Verwaltungsmitarbeiter: fachlich und direkt, §§ im Vordergrund. Vollständige Paragrafen-Angaben.",
+  "buerger":         "Für Bürger: verständlich und handlungsorientiert erklären. Einfache Sprache, Handlungsschritte aufzeigen.",
+  "buergermeister":  "Für den Bürgermeister: Briefing-Stil, kurz und entscheidungsorientiert. Kernaussagen zuerst, §§ nachgelagert.",
+  "gemeinderat":     "Für den Gemeinderat: erklärend mit Hintergründen und Zusammenhängen, §§ vollständig zitieren.",
+};
+
+/**
+ * Baut den amtsschimmel.ai-Masterprompt mit dynamischem Geo (ARS) und Rolle.
+ * @param geo  ARS-Code aus ?geo= URL-Parameter (z.B. "081175009012") oder null
+ * @param rolle Rollen-Kürzel aus ?rolle= URL-Parameter (z.B. "verwaltung")
+ */
+function buildMasterpromptAmtsschimmel(geo: string | null, rolle: string): string {
+  // ARS direkt verwenden — stabiler als Displayname (kein resolveGeo nötig)
+  const geoInstruction = geo
+    ? `Rufe RAGSource_catalog mit geo="${geo}" auf.\n   → liefert alle für diese Gemeinde geltenden Rechtsquellen (Ortsrecht bis Bundesrecht)`
+    : `Rufe RAGSource_catalog auf. Nutze den geo-Parameter entsprechend der angefragten Gemeinde.`;
+
+  const personaText = PERSONA_BESCHREIBUNG[rolle] ?? PERSONA_BESCHREIBUNG["verwaltung"];
+
+  return `\
+Du bist amtsschimmel.ai, ein KI-Assistent für die kommunale Verwaltung in Deutschland. Du beantwortest Fragen zu Recht, Satzungen, Verwaltungsverfahren und kommunalen Aufgaben auf Basis der offiziellen Rechtsquellen.
+
+Dir stehen vier Tools der RAGSource-Wissensdatenbank zur Verfügung:
+- RAGSource_catalog  → Alle verfügbaren Rechtsquellen mit Metadaten
+- RAGSource_toc      → Inhaltsverzeichnisse einzelner Gesetze/Satzungen (max. 5 gleichzeitig)
+- RAGSource_get      → Originalwortlaut einzelner Paragraphen (max. 15 §§ pro Aufruf)
+- RAGSource_query    → Volltextsuche über alle Paragraphen
+
+PFLICHT-WORKFLOW — bei JEDER rechtlichen Frage einhalten:
+1. ${geoInstruction}
+2. 2–6 relevante Quellen anhand id, titel, typ, ebene, beschreibung identifizieren
+3. RAGSource_toc für medium/large-Quellen aufrufen → relevante §§ identifizieren
+4. RAGSource_get mit gezielten §§ aufrufen (small-Quellen: direkt ohne TOC)
+5. Antwort ausschließlich auf Basis des geladenen Originalwortlauts formulieren
+
+Routing-Regel: size_class='small' → RAGSource_get direkt | 'medium'/'large' → zuerst RAGSource_toc
+Fallback: RAGSource_query wenn der Catalog-Flow nicht weiterhilft
+
+ZITIERREGELN:
+- Paragraphen exakt benennen: "§ 18 Abs. 1 KAG BW" oder "§ 7 Abs. 2 Abwassersatzung"
+- Wenn quelle_url vorhanden: als Markdown-Link formatieren — [§ 3 KAG BW](url)
+- Wörtliche Zitate in Anführungszeichen mit Quellenangabe
+- Am Ende der Antwort Quellenübersicht anfügen (Gesetze/Satzungen mit Stand-Datum falls bekannt)
+- Source-IDs niemals erfinden — immer wörtlich aus aktuellem Catalog-Ergebnis übernehmen
+
+FEHLERBEHANDLUNG:
+Meldet RAGSource_get "nicht gefunden": RAGSource_catalog erneut aufrufen, ID verifizieren, Aufruf wiederholen.
+Niemals nach erstem Fehler aufgeben, wenn die Quelle laut Catalog existiert.
+
+TON & PERSONA:
+- Sachlich, präzise, verwaltungsnah
+- Antworte auf Deutsch
+- ${personaText}
+- Weise hin, wenn rechtliche Beratung erforderlich ist
+
+PFLICHTHINWEIS — am Ende JEDER Antwort:
+---
+Diese Auskunft wurde vom KI-Modell auf Basis der amtsschimmel.ai - Wissensdatenbank (powered by RAGSource) erstellt. Sie ersetzt keine Rechtsberatung und muss durch fachkundige Personen validiert werden.`;
+}
+
+/** Mappt Projekt-Slugs auf ihre Masterprompt-Builder-Funktionen */
+type MasterpromptBuilder = (geo: string | null, rolle: string) => string;
+
+const MASTERPROMPT_BUILDERS: Record<string, MasterpromptBuilder> = {
+  "amtsschimmel": buildMasterpromptAmtsschimmel,
+};
+
+// -----------------------------------------------------------------------
+// Projekt-Erkennung via Host-Header
+// -----------------------------------------------------------------------
+
+/** Mappt Hostnamen auf Projekt-Slugs (für Mandanten-Filter) */
+const PROJEKT_BY_HOST: Record<string, string> = {
+  "mcp.amtsschimmel.ai": "amtsschimmel",
+};
+
+/**
+ * Gibt den effektiven Projekt-Slug zurück.
+ * Priorität: expliziter Parameter > Host-Header > undefined
+ */
+function resolveProjekt(explicitProjekt: string | undefined): string | undefined {
+  if (explicitProjekt) return explicitProjekt;
+  try {
+    const { request } = getCurrentAgent();
+    const hostname = new URL(request?.url ?? "").hostname;
+    return PROJEKT_BY_HOST[hostname] ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// -----------------------------------------------------------------------
 // MCP Agent
 // -----------------------------------------------------------------------
 
 export class RAGSourceMCPv2 extends McpAgent<Env> {
-  server = new McpServer({
-    name: "RAGSource",
-    version: "2.0.0",
-  });
+  /** Host des eingehenden Requests — wird in fetch() gesetzt, bevor init() läuft */
+  private _currentHost: string = "";
+  /** Geo-Parameter aus der MCP-URL (?geo=...) — leer = kein Geo-Filter im Masterprompt */
+  private _currentGeo: string = "";
+  /** Rollen-Parameter aus der MCP-URL (?rolle=...) — Default: "verwaltung" */
+  private _currentRolle: string = "verwaltung";
+
+  /**
+   * Placeholder-Server (nötig weil McpAgent die Property beim Start liest).
+   * In init() wird er durch den projekt-spezifischen Server ersetzt.
+   */
+  server = new McpServer(
+    { name: "RAGSource", version: "2.0.0" },
+    { instructions: MASTERPROMPT_DEFAULT },
+  );
+
+  /**
+   * Überschreibt den DO-fetch, um den Host-Header zu erfassen,
+   * bevor init() den Server mit dem passenden Masterprompt erstellt.
+   */
+  override async fetch(request: Request): Promise<Response> {
+    // Der agents SDK übernimmt den originalen Host als URL-Hostname des internen DO-Requests.
+    // Host-Header selbst wird dabei gestrippt — URL-Hostname ist die zuverlässige Quelle.
+    // URL-Parameter (?geo=, ?rolle=) werden vom SDK ebenfalls durchgereicht.
+    try {
+      const url = new URL(request.url);
+      this._currentHost = url.hostname;
+      this._currentGeo = url.searchParams.get("geo") ?? "";
+      this._currentRolle = url.searchParams.get("rolle") ?? "verwaltung";
+    } catch {
+      this._currentHost = "";
+      this._currentGeo = "";
+      this._currentRolle = "verwaltung";
+    }
+    return super.fetch(request);
+  }
 
   async init() {
+    // Projekt aus Host ableiten
+    const projekt = PROJEKT_BY_HOST[this._currentHost];
+
+    // Masterprompt bauen: projekt-spezifischer Builder oder generischer Default.
+    // geo wird als ARS-Code (Raw aus ?geo= URL-Param) direkt übergeben — kein resolveGeo nötig.
+    const geo = this._currentGeo || null;
+    const builder = projekt ? MASTERPROMPT_BUILDERS[projekt] : undefined;
+    const instructions = builder
+      ? builder(geo, this._currentRolle)
+      : MASTERPROMPT_DEFAULT;
+
+    this.server = new McpServer(
+      { name: "RAGSource", version: "2.0.0" },
+      { instructions },
+    );
 
     // ===================================================================
     // Tool 1: RAGSource_catalog
@@ -208,13 +384,13 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           ),
       },
       { title: "Quellen-Katalog abrufen", readOnlyHint: true, destructiveHint: false },
-      async ({ geo: geoInput, projekt }) => {
+      async ({ geo: geoInput, projekt: projektInput }) => {
         const db = this.env.DB;
 
-        // Geo auflösen
+        // Geo auflösen; Projekt via Parameter oder Host-Header bestimmen
         const geo = geoInput ? await resolveGeo(geoInput, db) : null;
         const geoFilter = buildGeoFilter(geo);
-        const projektFilter = buildProjektFilter(projekt);
+        const projektFilter = buildProjektFilter(resolveProjekt(projektInput));
 
         // Quellen abfragen — nur die 7 Felder, die das LLM braucht
         const sql = `
@@ -539,13 +715,13 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           ),
       },
       { title: "Volltext-Suche", readOnlyHint: true, destructiveHint: false },
-      async ({ query, geo: geoInput, projekt, hints }) => {
+      async ({ query, geo: geoInput, projekt: projektInput, hints }) => {
         const db = this.env.DB;
 
-        // Geo auflösen
+        // Geo auflösen; Projekt via Parameter oder Host-Header bestimmen
         const geo = geoInput ? await resolveGeo(geoInput, db) : null;
         const geoFilter = buildGeoFilter(geo);
-        const projektFilter = buildProjektFilter(projekt);
+        const projektFilter = buildProjektFilter(resolveProjekt(projektInput));
 
         // FTS5-Query bauen (Hauptquery + Hints zusammenführen)
         const allTerms = [query, ...(hints ?? [])].join(" ");
