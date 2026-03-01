@@ -415,11 +415,12 @@ for (const { file, root } of mdFilesWithRoot) {
 
   // 1. sources-Eintrag
   group.push(
-    `INSERT INTO sources (id, titel, kurzbezeichnung, typ, ebene, land_ars, kreis_ars, verband_ars, gemeinde_ars, section_count, total_tokens, size_class, gueltig_ab, quelle, dateipfad) VALUES (` +
+    `INSERT INTO sources (id, titel, kurzbezeichnung, typ, ebene, land_ars, kreis_ars, verband_ars, gemeinde_ars, section_count, total_tokens, size_class, gueltig_ab, quelle, dateipfad, url, beschreibung, stand) VALUES (` +
     `${esc(sourceId)}, ${esc(fm.titel)}, ${esc(fm.kurzbezeichnung || null)}, ${esc(fm.typ || null)}, ${esc(ebene)}, ` +
     `${esc(land_ars)}, ${esc(kreis_ars)}, ${esc(verband_ars)}, ${esc(gemeinde_ars)}, ` +
     `${sections.length}, ${totalTokens}, ${esc(sizeClass)}, ` +
-    `${esc(fm.gueltig_ab || null)}, ${esc(fm.quelle || null)}, ${esc(dateipfad)});`,
+    `${esc(fm.gueltig_ab || null)}, ${esc(fm.quelle || null)}, ${esc(dateipfad)}, ` +
+    `${esc(fm.url || null)}, ${esc(fm.beschreibung || null)}, ${esc(fm.stand || null)});`,
   );
 
   // 2. source_projekte

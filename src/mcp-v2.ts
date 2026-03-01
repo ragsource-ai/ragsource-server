@@ -207,6 +207,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             "Ohne Angabe werden alle Quellen zurueckgegeben.",
           ),
       },
+      { title: "Quellen-Katalog abrufen", readOnlyHint: true, destructiveHint: false },
       async ({ geo: geoInput, projekt }) => {
         const db = this.env.DB;
 
@@ -303,6 +304,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             "Ohne Angabe: 'gesamt'.",
           ),
       },
+      { title: "Inhaltsverzeichnis abrufen", readOnlyHint: true, destructiveHint: false },
       async ({ sources: sourceIds, level }) => {
         const db = this.env.DB;
         const targetLevel = level ?? "gesamt";
@@ -401,6 +403,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             "Leer lassen fuer gesamtes Dokument (nur fuer small-Quellen empfohlen).",
           ),
       },
+      { title: "Paragraphen abrufen", readOnlyHint: true, destructiveHint: false },
       async ({ source: sourceId, sections: requestedRefs }) => {
         const db = this.env.DB;
 
@@ -530,6 +533,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             "Optionale Zusatz-Suchbegriffe: Synonyme, Fachbegriffe, verwandte Begriffe",
           ),
       },
+      { title: "Volltext-Suche", readOnlyHint: true, destructiveHint: false },
       async ({ query, geo: geoInput, projekt, hints }) => {
         const db = this.env.DB;
 

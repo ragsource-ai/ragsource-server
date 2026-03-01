@@ -19,7 +19,10 @@ CREATE TABLE IF NOT EXISTS sources (
   size_class TEXT,              -- "small" | "medium" | "large"
   gueltig_ab TEXT,              -- ISO-Datum
   quelle TEXT,                  -- Rechtsgrundlage / Fundstelle
-  dateipfad TEXT                -- Originalpfad (relativ zum Content-Root)
+  dateipfad TEXT,               -- Originalpfad (relativ zum Content-Root)
+  url TEXT,                     -- Quell-URL (z.B. https://www.gesetze-im-internet.de/...)
+  beschreibung TEXT,            -- Kurzbeschreibung für Catalog (1-2 Sätze)
+  stand TEXT                    -- Datum der letzten inhaltlichen Änderung (ISO-Datum)
 );
 
 CREATE INDEX IF NOT EXISTS idx_sources_ebene ON sources(ebene);

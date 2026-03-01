@@ -30,6 +30,9 @@ export interface Source {
   gueltig_ab: string | null;
   quelle: string | null;
   dateipfad: string | null;
+  url: string | null;
+  beschreibung: string | null;
+  stand: string | null;
 }
 
 /** Ein Paragraph / Artikel / Erwägungsgrund */
