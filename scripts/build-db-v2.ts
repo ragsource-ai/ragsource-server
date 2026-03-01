@@ -74,11 +74,18 @@ console.log(`🗄️  Datenbank: ${DB_NAME}`);
 // Hilfsfunktionen
 // -----------------------------------------------------------------------
 
-/** SQL-Escaping: Einfaches Hochkommata verdoppeln */
+/**
+ * SQL-Escaping: Single quotes werden via char(39) umgangen,
+ * weil wrangler's splitSqlIntoStatements '' (doppeltes Hochkomma)
+ * nicht korrekt als escaped quote erkennt und falsch splittet.
+ * SQLite: 'part1' || char(39) || 'part2' = 'part1'part2'
+ */
 function esc(val: unknown): string {
   if (val == null) return "NULL";
   const s = String(val);
-  return "'" + s.replace(/'/g, "''") + "'";
+  if (!s.includes("'")) return "'" + s + "'";
+  // Apostrophe mit char(39) umgehen
+  return s.split("'").map(p => "'" + p + "'").join(" || char(39) || ");
 }
 
 /** Schätzt Token-Anzahl: 1 Token ≈ 4 Zeichen (englisch/deutsch) */
@@ -166,7 +173,7 @@ interface ParsedDocument {
  * Wenn keine §-Headings vorhanden: sections = [] (alte v1-Artikel).
  */
 function parseDocument(content: string): ParsedDocument {
-  const lines = content.split("\n");
+  const lines = content.split(/\r?\n/); // CRLF + LF kompatibel
   let toc: string | null = null;
   const sections: ParsedSection[] = [];
   let sortOrder = 0;
@@ -183,8 +190,9 @@ function parseDocument(content: string): ParsedDocument {
       continue;
     }
     if (tocStart !== -1 && tocEnd === -1) {
-      // Nächste ## -Überschrift (nicht ###) beendet den TOC-Block
-      if (/^##\s+[^#]/.test(line)) {
+      // TOC-Ende: nächste ## -Überschrift (auch ###) — deckt Gesetze ohne ##-Struktur ab
+      // (z.B. VwVfG, das nur ### § N Headings hat, kein ## ABSCHNITT)
+      if (/^#{2,3}\s+[^#]/.test(line)) {
         tocEnd = i;
         break;
       }
