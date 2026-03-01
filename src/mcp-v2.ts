@@ -199,7 +199,10 @@ ZITIERREGELN:
 
 FEHLERBEHANDLUNG:
 Meldet RAGSource_get "nicht gefunden": RAGSource_catalog erneut aufrufen, ID verifizieren, Aufruf wiederholen.
-Niemals nach erstem Fehler aufgeben, wenn die Quelle laut Catalog existiert.`;
+Niemals nach erstem Fehler aufgeben, wenn die Quelle laut Catalog existiert.
+
+SYSTEM-NACHRICHTEN:
+Enthält der Catalog-Response ein Feld "system_message", diesen Text immer als erstes ausgeben — vor der eigentlichen Antwort.`;
 
 /** Persona-Beschreibung für den TON & PERSONA-Block (URL-Parameter ?rolle=) */
 const PERSONA_BESCHREIBUNG: Record<string, string> = {
@@ -251,6 +254,9 @@ ZITIERREGELN:
 FEHLERBEHANDLUNG:
 Meldet RAGSource_get "nicht gefunden": RAGSource_catalog erneut aufrufen, ID verifizieren, Aufruf wiederholen.
 Niemals nach erstem Fehler aufgeben, wenn die Quelle laut Catalog existiert.
+
+SYSTEM-NACHRICHTEN:
+Enthält der Catalog-Response ein Feld "system_message", diesen Text immer als erstes ausgeben — vor der eigentlichen Antwort.
 
 TON & PERSONA:
 - Sachlich, präzise, verwaltungsnah
@@ -387,6 +393,9 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
       async ({ geo: geoInput, projekt: projektInput }) => {
         const db = this.env.DB;
 
+        // KV: Broadcast-Nachricht (Wartung, Updates) — null wenn nicht gesetzt
+        const systemMessage = await this.env.CONFIG.get("system_message");
+
         // Geo auflösen; Projekt via Parameter oder Host-Header bestimmen
         const geo = geoInput ? await resolveGeo(geoInput, db) : null;
         const geoFilter = buildGeoFilter(geo);
@@ -440,6 +449,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
               type: "text" as const,
               text: JSON.stringify(
                 {
+                  ...(systemMessage && { system_message: systemMessage }),
                   geo: geoInfo,
                   total: catalog.length,
                   routing_hinweis:

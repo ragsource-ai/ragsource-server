@@ -13,6 +13,13 @@
     }
   ],
 
+  "kv_namespaces": [
+    {
+      "binding": "CONFIG",
+      "id": "e0af38b6cee446adb258055e172c8a26"
+    }
+  ],
+
   "durable_objects": {
     "bindings": [
       {

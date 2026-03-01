@@ -7,6 +7,7 @@
 export interface Env {
   DB: D1Database;
   MCP_OBJECT: DurableObjectNamespace;
+  CONFIG: KVNamespace;
 }
 
 // -----------------------------------------------------------------------
