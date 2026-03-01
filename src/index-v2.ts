@@ -72,7 +72,32 @@ export default {
 
     // MCP-Endpunkt → McpAgent (Durable Objects)
     if (url.pathname === "/mcp" || url.pathname.startsWith("/mcp/")) {
-      return RAGSourceMCPv2.serve("/mcp").fetch(request, env, ctx);
+      // CORS-Preflight (ChatGPT, Cursor, andere Browser-Clients)
+      if (request.method === "OPTIONS") {
+        return new Response(null, {
+          status: 204,
+          headers: {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, mcp-session-id",
+            "Access-Control-Expose-Headers": "mcp-session-id",
+            "Access-Control-Max-Age": "86400",
+          },
+        });
+      }
+
+      // MCP-Request durchleiten + CORS-Header anhängen
+      const mcpResponse = await RAGSourceMCPv2.serve("/mcp").fetch(request, env, ctx);
+      const headers = new Headers(mcpResponse.headers);
+      headers.set("Access-Control-Allow-Origin", "*");
+      headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id");
+      headers.set("Access-Control-Expose-Headers", "mcp-session-id");
+      return new Response(mcpResponse.body, {
+        status: mcpResponse.status,
+        statusText: mcpResponse.statusText,
+        headers,
+      });
     }
 
     // REST-Endpunkte → Hono
