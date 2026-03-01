@@ -72,7 +72,6 @@ export interface ResponsePacket {
   articles: ArticleResult[];
   persona: PersonaConfig;
   geo: GeoInfo;
-  hierarchy: HierarchyInfo;
   disclaimer: string;
 }
 
@@ -103,14 +102,3 @@ export interface GeoInfo {
   land: string | null;
 }
 
-export interface HierarchyInfo {
-  conflicts: HierarchyConflict[];
-}
-
-export interface HierarchyConflict {
-  thema: string;
-  artikel_hoeher: string;
-  artikel_niedriger: string;
-  ebene_hoeher: Ebene;
-  ebene_niedriger: Ebene;
-}

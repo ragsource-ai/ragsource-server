@@ -7,7 +7,7 @@ import type {
   GeoInfo,
 } from "../types.js";
 import type { ResolvedGeo } from "./normalize.js";
-import { sortByHierarchy, detectConflicts } from "./hierarchy.js";
+import { sortByHierarchy } from "./hierarchy.js";
 import { DISCLAIMER } from "./config.js";
 
 const PERSONA_CONFIGS: Record<Persona, PersonaConfig> = {
@@ -56,9 +56,6 @@ export function buildResponsePacket(
   // Artikel nach Hierarchie sortieren
   const sorted = sortByHierarchy(articles);
 
-  // Konflikte erkennen
-  const hierarchy = detectConflicts(sorted);
-
   // Artikel-Ergebnisse aufbereiten
   const articleResults: ArticleResult[] = sorted.map((a) => ({
     titel: a.titel,
@@ -91,7 +88,6 @@ export function buildResponsePacket(
     articles: articleResults,
     persona: PERSONA_CONFIGS[persona],
     geo: geoInfo,
-    hierarchy,
     disclaimer: DISCLAIMER,
   };
 }
