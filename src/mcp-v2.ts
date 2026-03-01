@@ -184,7 +184,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
       "RAGSource_catalog",
       "Liefert das Verzeichnis aller verfuegbaren Rechtsquellen (Gesetze, Satzungen, Verordnungen) " +
       "fuer eine bestimmte Gemeinde oder Region. " +
-      "Jeder Eintrag enthaelt id, titel, typ, ebene, size_class und toc_available. " +
+      "Jeder Eintrag enthaelt id, titel, typ, ebene, size_class, toc_available und beschreibung. " +
       "Routing-Regel: " +
       "'small' → RAGSource_get direkt (gesamtes Dokument, wenige §§); " +
       "'medium'/'large' → RAGSource_toc aufrufen — liefert bei toc_available=true das Inhaltsverzeichnis " +
@@ -216,12 +216,9 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         const geoFilter = buildGeoFilter(geo);
         const projektFilter = buildProjektFilter(projekt);
 
-        // Quellen abfragen (inkl. toc_available-Flag via Subquery)
+        // Quellen abfragen — nur die 7 Felder, die das LLM braucht
         const sql = `
-          SELECT s.id, s.titel, s.kurzbezeichnung, s.typ, s.ebene,
-                 s.land_ars, s.kreis_ars, s.verband_ars, s.gemeinde_ars,
-                 s.section_count, s.total_tokens, s.size_class,
-                 s.gueltig_ab, s.quelle,
+          SELECT s.id, s.titel, s.typ, s.ebene, s.size_class, s.beschreibung,
                  EXISTS(SELECT 1 FROM source_tocs t WHERE t.source_id = s.id) AS toc_available
           FROM sources s
           WHERE ${geoFilter.sql}
@@ -229,11 +226,19 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           ORDER BY s.ebene, s.titel
         `;
 
-        type SourceWithToc = Source & { toc_available: 0 | 1 };
+        type CatalogRow = {
+          id: string;
+          titel: string;
+          typ: string | null;
+          ebene: string | null;
+          size_class: string;
+          beschreibung: string | null;
+          toc_available: 0 | 1;
+        };
         const result = await db
           .prepare(sql)
           .bind(...geoFilter.params, ...projektFilter.params)
-          .all<SourceWithToc>();
+          .all<CatalogRow>();
 
         const sources = result.results ?? [];
         const sorted = sortByEbene(sources);
@@ -242,12 +247,11 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         const catalog: CatalogEntry[] = sorted.map((s) => ({
           id: s.id,
           titel: s.titel,
-          kurzbezeichnung: s.kurzbezeichnung,
           typ: s.typ,
           ebene: s.ebene,
           size_class: s.size_class,
-          section_count: s.section_count,
           toc_available: s.toc_available === 1,
+          beschreibung: s.beschreibung,
         }));
 
         const geoInfo = geo
@@ -407,13 +411,13 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
       async ({ source: sourceId, sections: requestedRefs }) => {
         const db = this.env.DB;
 
-        // Quell-Metadaten laden
+        // Quell-Metadaten laden (inkl. url für quelle_url in der Response)
         const source = await db
           .prepare(
-            "SELECT id, titel, kurzbezeichnung, quelle, size_class, section_count FROM sources WHERE id = ?",
+            "SELECT id, titel, kurzbezeichnung, quelle, url, size_class, section_count FROM sources WHERE id = ?",
           )
           .bind(sourceId)
-          .first<Pick<Source, "id" | "titel" | "kurzbezeichnung" | "quelle" | "size_class" | "section_count">>();
+          .first<Pick<Source, "id" | "titel" | "kurzbezeichnung" | "quelle" | "url" | "size_class" | "section_count">>();
 
         if (!source) {
           return {
@@ -488,6 +492,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
                   titel: source.titel,
                   kurzbezeichnung: source.kurzbezeichnung,
                   quelle: source.quelle,
+                  quelle_url: source.url,
                   sections_geladen: sections.length,
                   sections,
                 },

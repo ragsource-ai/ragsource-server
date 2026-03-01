@@ -62,12 +62,11 @@ export interface SourceToc {
 export interface CatalogEntry {
   id: string;
   titel: string;
-  kurzbezeichnung: string | null;
   typ: string | null;
   ebene: string | null;
   size_class: string;
-  section_count: number;
   toc_available: boolean;       // true wenn TOC in source_tocs vorhanden
+  beschreibung: string | null;  // Kurzbeschreibung der Quelle
 }
 
 /** TOC-Ergebnis (für RAGSource_toc) */
