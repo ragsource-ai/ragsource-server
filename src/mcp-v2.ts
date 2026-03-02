@@ -265,9 +265,10 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
 
     // Kurze Instructions bauen: projekt-spezifischer Builder oder generischer Default.
     // geo wird als ARS-Code (Raw aus ?geo= URL-Param) direkt übergeben — kein resolveGeo nötig.
-    const geo = this._currentGeo || null;
+    // sessionGeo dient zusätzlich als Default in Tool-Handlern (Closure).
+    const sessionGeo = this._currentGeo || null;
     const builder = projekt ? INSTRUCTIONS_BUILDERS[projekt] : undefined;
-    const instructions = builder ? builder(geo) : INSTRUCTIONS_DEFAULT;
+    const instructions = builder ? builder(sessionGeo) : INSTRUCTIONS_DEFAULT;
 
     this.server = new McpServer(
       { name: "RAGSource", version: "2.0.0" },
@@ -312,8 +313,9 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         // KV: Broadcast-Nachricht (Wartung, Updates) — null wenn nicht gesetzt
         const systemMessage = await this.env.CONFIG.get("system_message");
 
-        // Geo auflösen; Projekt via Parameter oder Host-Header bestimmen
-        const geo = geoInput ? await resolveGeo(geoInput, db) : null;
+        // Geo auflösen; URL-?geo= als Session-Default wenn kein expliziter Parameter
+        const effectiveGeo = geoInput ?? sessionGeo;
+        const geo = effectiveGeo ? await resolveGeo(effectiveGeo, db) : null;
         const geoFilter = buildGeoFilter(geo);
         const projektFilter = buildProjektFilter(resolveProjekt(projektInput));
 
@@ -640,8 +642,9 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
       async ({ query, geo: geoInput, projekt: projektInput, hints }) => {
         const db = this.env.DB;
 
-        // Geo auflösen; Projekt via Parameter oder Host-Header bestimmen
-        const geo = geoInput ? await resolveGeo(geoInput, db) : null;
+        // Geo auflösen; URL-?geo= als Session-Default wenn kein expliziter Parameter
+        const effectiveGeo = geoInput ?? sessionGeo;
+        const geo = effectiveGeo ? await resolveGeo(effectiveGeo, db) : null;
         const geoFilter = buildGeoFilter(geo);
         const projektFilter = buildProjektFilter(resolveProjekt(projektInput));
 
