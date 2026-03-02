@@ -45,6 +45,8 @@ const TOKEN_LARGE = 15_000;
 //   - EG: ### EG N (Plan-Format)
 //   - Kapitel: ## Kapitel N
 // Kein Limit auf Heading-Ebene (2–6 Rauten) um ##### und ###### (GKZ BW) zu erfassen
+// Fallback: Dateien ohne Standard-§-Headings (z.B. Gebührenverzeichnisse mit Prod. Nr.)
+// erhalten einen zweiten Parsing-Durchlauf — alle ##/###-Headings als Abschnittsgrenzen.
 const SECTION_HEADING_MATCH_RE = /^(#{2,6})\s+(§\s*\d+[a-z]?|Artikel\s+\d+[a-z]?|Art\.\s*\d+[a-z]?|Erwägungsgrund\s+\d+|EG\s+\d+|Kapitel\s+\d+[a-z]?)\s*(?:[—–-]\s*)?(.*)?$/i;
 // Für das Splitting: Beginnt eine Zeile mit einem §/Artikel/Erwägungsgrund-Heading (2–6 Rauten)?
 const SECTION_START_RE = /^#{2,6}\s+(?:§\s*\d+[a-z]?|Artikel\s+\d+[a-z]?|Art\.\s*\d+[a-z]?|Erwägungsgrund\s+\d+|EG\s+\d+|Kapitel\s+\d+[a-z]?)/m;
@@ -253,6 +255,43 @@ function parseDocument(content: string): ParsedDocument {
 
   // Letzten Abschnitt flush
   flushSection();
+
+  // Fallback-Parser: Falls keine Standard-Abschnitte gefunden wurden
+  // (z.B. Gebührenverzeichnisse mit Prod. Nr., Nr. N oder Amtsbezeichnungen
+  // statt §-Headings), alle ##/###-Headings als Abschnittsgrenzen behandeln.
+  if (sections.length === 0) {
+    const FALLBACK_HEADING_RE = /^(#{2,6})\s+(.+?)(?:\s+[-—–]\s+(.*?))?$/;
+    let fbLines: string[] = [];
+    let fbHeading: string | null = null;
+
+    const flushFallback = () => {
+      if (!fbHeading) return;
+      const m = fbHeading.match(FALLBACK_HEADING_RE);
+      if (!m) return;
+      const sectionRef = m[2].trim();
+      const headingText = (m[3] || "").trim();
+      const body = fbLines.join("\n").trim();
+      sections.push({
+        sectionRef,
+        heading: headingText,
+        body,
+        sectionType: "eintrag",
+        sortOrder: sortOrder++,
+      });
+      fbLines = [];
+      fbHeading = null;
+    };
+
+    for (const line of lines) {
+      if (/^#{2,6}\s+\S/.test(line)) {
+        flushFallback();
+        fbHeading = line;
+      } else if (fbHeading !== null) {
+        fbLines.push(line);
+      }
+    }
+    flushFallback();
+  }
 
   return { toc, sections };
 }
