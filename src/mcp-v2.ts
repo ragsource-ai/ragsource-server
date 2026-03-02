@@ -391,17 +391,17 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
       "SCHRITT 2 — Fuer 'medium'/'large'-Quellen aufrufen, bevor RAGSource_get verwendet wird. " +
       "Liefert das Inhaltsverzeichnis mit allen §§/Artikeln und Kurztiteln, " +
       "z.B. '§ 6 Aufgaben (Pflichtaufgaben, Mindeststaerke)'. " +
-      "Bis zu 5 Quellen gleichzeitig abfragen (Batch). " +
+      "Bis zu 8 Quellen gleichzeitig abfragen (Batch). " +
       "Die section_ref-Werte aus dem TOC exakt so an RAGSource_get uebergeben. " +
       "Falls toc=null: Tool liefert bei small/medium-Quellen automatisch alle §§ im Feld 'sections'.",
       {
         sources: z
           .array(z.string())
           .min(1)
-          .max(5)
+          .max(8)
           .describe(
             "Liste von Source-IDs aus RAGSource_catalog, z.B. ['FwG_BW', 'BBO_Satzung_Feuerwehr']. " +
-            "Max. 5 pro Aufruf.",
+            "Max. 8 pro Aufruf.",
           ),
         level: z
           .string()
@@ -490,98 +490,138 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     this.server.tool(
       "RAGSource_get",
-      "SCHRITT 3 — Laedt den Originalwortlaut von Paragraphen aus einer Rechtsquelle. " +
+      "SCHRITT 3 — Laedt den Originalwortlaut von Paragraphen aus einer oder mehreren Rechtsquellen. " +
       "section_ref exakt wie im TOC angegeben verwenden, z.B. '§ 2', 'Artikel 6', 'Prod. Nr. 41.40.08'. " +
-      "Max. 15 §§ pro Aufruf; bei Bedarf mehrfach aufrufen. " +
+      "Max. 8 Quellen pro Aufruf; max. 25 §§ je Quelle; max. 50 §§ gesamt. " +
       "Fuer 'small'-Quellen: sections weglassen → liefert das komplette Dokument. " +
       "Fuer 'medium'/'large': zuerst RAGSource_toc, dann gezielte §§ angeben. " +
       "Liefert 'quelle_url' fuer Markdown-Links in der Antwort.",
       {
-        source: z
-          .string()
-          .describe("Source-ID aus RAGSource_catalog, z.B. 'FwG_BW'"),
-        sections: z
-          .array(z.string())
-          .max(15)
-          .optional()
+        sources: z
+          .array(
+            z.object({
+              source: z
+                .string()
+                .describe("Source-ID aus RAGSource_catalog, z.B. 'FwG_BW'"),
+              sections: z
+                .array(z.string())
+                .max(25)
+                .optional()
+                .describe(
+                  "Paragraphen-Referenzen, z.B. ['§ 2', '§ 8', 'Artikel 24']. " +
+                  "Leer lassen fuer gesamtes Dokument (nur fuer small-Quellen empfohlen).",
+                ),
+            }),
+          )
+          .min(1)
+          .max(8)
           .describe(
-            "Paragraphen-Referenzen, z.B. ['§ 2', '§ 8', 'Artikel 24']. " +
-            "Leer lassen fuer gesamtes Dokument (nur fuer small-Quellen empfohlen).",
+            "Liste von Quellen mit optionalen Paragraphen-Referenzen. " +
+            "Max. 8 Quellen, max. 25 §§ je Quelle, max. 50 §§ gesamt pro Aufruf.",
           ),
       },
       { title: "Paragraphen abrufen", readOnlyHint: true, destructiveHint: false },
-      async ({ source: sourceId, sections: requestedRefs }) => {
+      async ({ sources: sourceRequests }) => {
         const db = this.env.DB;
 
-        // Quell-Metadaten laden (inkl. url für quelle_url in der Response)
-        const source = await db
-          .prepare(
-            "SELECT id, titel, kurzbezeichnung, quelle, url, size_class, section_count FROM sources WHERE id = ?",
-          )
-          .bind(sourceId)
-          .first<Pick<Source, "id" | "titel" | "kurzbezeichnung" | "quelle" | "url" | "size_class" | "section_count">>();
+        const MAX_TOTAL_SECTIONS = 50;
+        type SourceResult = {
+          source: string;
+          titel?: string;
+          kurzbezeichnung?: string | null;
+          quelle?: string | null;
+          quelle_url?: string | null;
+          sections_geladen?: number;
+          sections?: SectionResult[];
+          error?: string;
+        };
+        const results: SourceResult[] = [];
+        let totalSectionsLoaded = 0;
+        let truncated = false;
 
-        if (!source) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: JSON.stringify({
-                  error: `Quelle '${sourceId}' nicht gefunden. Bitte RAGSource_catalog aufrufen.`,
-                }),
-              },
-            ],
-          };
-        }
-
-        let sections: SectionResult[] = [];
-
-        if (!requestedRefs || requestedRefs.length === 0) {
-          // Alle Paragraphen laden (gesamtes Dokument)
-          const all = await db
+        for (const req of sourceRequests) {
+          // Quell-Metadaten laden (inkl. url für quelle_url in der Response)
+          const source = await db
             .prepare(
-              "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? ORDER BY sort_order",
+              "SELECT id, titel, kurzbezeichnung, quelle, url, size_class, section_count FROM sources WHERE id = ?",
             )
-            .bind(sourceId)
-            .all<{ section_ref: string; heading: string | null; body: string }>();
+            .bind(req.source)
+            .first<Pick<Source, "id" | "titel" | "kurzbezeichnung" | "quelle" | "url" | "size_class" | "section_count">>();
 
-          sections = (all.results ?? []).map((r) => ({
-            ref: r.section_ref,
-            heading: r.heading,
-            body: r.body,
-          }));
-        } else {
-          // Gezielte Paragraphen laden (normalisierter Abgleich)
-          for (const rawRef of requestedRefs) {
-            const normalized = normalizeSectionRef(rawRef);
-
-            // Exakter Match zuerst
-            let row = await db
-              .prepare(
-                "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? AND section_ref = ? LIMIT 1",
-              )
-              .bind(sourceId, normalized)
-              .first<{ section_ref: string; heading: string | null; body: string }>();
-
-            // Fallback: LIKE-Suche (z.B. "§2" statt "§ 2")
-            if (!row) {
-              row = await db
-                .prepare(
-                  "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? AND section_ref LIKE ? LIMIT 1",
-                )
-                .bind(sourceId, `%${normalized.replace(/\s+/g, "%")}%`)
-                .first<{ section_ref: string; heading: string | null; body: string }>();
-            }
-
-            if (row) {
-              sections.push({
-                ref: row.section_ref,
-                heading: row.heading,
-                body: row.body,
-              });
-            }
-            // Nicht gefundene §§ werden stillschweigend übersprungen
+          if (!source) {
+            results.push({
+              source: req.source,
+              error: `Quelle '${req.source}' nicht gefunden. Bitte RAGSource_catalog aufrufen.`,
+            });
+            continue;
           }
+
+          let sections: SectionResult[] = [];
+
+          if (!req.sections || req.sections.length === 0) {
+            // Alle Paragraphen laden (gesamtes Dokument)
+            const all = await db
+              .prepare(
+                "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? ORDER BY sort_order",
+              )
+              .bind(req.source)
+              .all<{ section_ref: string; heading: string | null; body: string }>();
+
+            sections = (all.results ?? []).map((r) => ({
+              ref: r.section_ref,
+              heading: r.heading,
+              body: r.body,
+            }));
+            totalSectionsLoaded += sections.length;
+          } else {
+            // Gezielte Paragraphen laden (normalisierter Abgleich)
+            for (const rawRef of req.sections) {
+              if (totalSectionsLoaded >= MAX_TOTAL_SECTIONS) {
+                truncated = true;
+                break;
+              }
+
+              const normalized = normalizeSectionRef(rawRef);
+
+              // Exakter Match zuerst
+              let row = await db
+                .prepare(
+                  "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? AND section_ref = ? LIMIT 1",
+                )
+                .bind(req.source, normalized)
+                .first<{ section_ref: string; heading: string | null; body: string }>();
+
+              // Fallback: LIKE-Suche (z.B. "§2" statt "§ 2")
+              if (!row) {
+                row = await db
+                  .prepare(
+                    "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? AND section_ref LIKE ? LIMIT 1",
+                  )
+                  .bind(req.source, `%${normalized.replace(/\s+/g, "%")}%`)
+                  .first<{ section_ref: string; heading: string | null; body: string }>();
+              }
+
+              if (row) {
+                sections.push({
+                  ref: row.section_ref,
+                  heading: row.heading,
+                  body: row.body,
+                });
+                totalSectionsLoaded++;
+              }
+              // Nicht gefundene §§ werden stillschweigend übersprungen
+            }
+          }
+
+          results.push({
+            source: source.id,
+            titel: source.titel,
+            kurzbezeichnung: source.kurzbezeichnung,
+            quelle: source.quelle,
+            quelle_url: source.url,
+            sections_geladen: sections.length,
+            sections,
+          });
         }
 
         return {
@@ -590,13 +630,11 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
               type: "text" as const,
               text: JSON.stringify(
                 {
-                  source: source.id,
-                  titel: source.titel,
-                  kurzbezeichnung: source.kurzbezeichnung,
-                  quelle: source.quelle,
-                  quelle_url: source.url,
-                  sections_geladen: sections.length,
-                  sections,
+                  results,
+                  total_sections: totalSectionsLoaded,
+                  ...(truncated && {
+                    hinweis: "Limit von 50 §§ pro Aufruf erreicht — nicht alle angeforderten §§ wurden geladen. Bitte Aufruf aufteilen.",
+                  }),
                 },
                 null,
                 2,
