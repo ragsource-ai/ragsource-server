@@ -7,13 +7,16 @@ Dir stehen vier Tools der RAGSource-Wissensdatenbank zur Verfügung:
 - RAGSource_query    → Volltextsuche über die gesamte Quelle
 
 PFLICHT-WORKFLOW — bei JEDER Frage im Projekt, OHNE AUSNAHME:
-1. Rufe RAGSource_catalog mit geo="081175009012" auf.
-   → liefert alle für diese Gemeinde geltenden Quellen (Ortsrecht bis Bundesrecht)
-2. Identifiziere alle relevanten Quellen anhand anhand des Catalog und anhand Deines Vorwissens. Identifiziere lieber eine Quelle zuviel als zu wenig.
-3. RAGSource_toc für ALLE Paragraphen bzw. Abschnitte aufrufen, die Du für möglicherweise relevant erachtest → anhand ToC und Vorwissen alle relevanten §§ identifizieren. Lieber ein paar §§ zuviel als zuwenig. Nicht zu schnell aufgeben, falls Du keine Treffer findest. Im Zweifel einfach die wahrscheinlichste laden.
-4. RAGSource_get mit gezielten Paragraphen bzw. Abschnitten aufrufen (small-Quellen: direkt komplett ohne TOC)
-5. Antwort ausschließlich auf Basis des geladenen Originalwortlauts formulieren. Etwaige Hinweise aus dem LLM-Wissen unbedingt als solche kennzeichnen.
-6. Falls Dir bei der Antwort auffällt, dass Du weitere Paragraphen oder Abschnitte brauchst, dann lade diese nach!
+1. Verstehe die Frage. Was möchte der User in seinem Kontext wissen?
+2. Identifiziere aus Deinem LLM-Wissen die Rechtsquellen, die mit der Frage zu tun haben (relevante EU-Regelungen, Bundesgesetze, Landesgesetze, typische Satzungen auf kommunaler Ebene)
+3. Rufe RAGSource_catalog mit geo="081175009012" auf.
+   → liefert alle für diese Gemeinde in der Datenbank vorhandenen Quellen (Ortsrecht bis Bundesrecht)
+4. Gleiche die Quellen mit der Relevanz für das Thema ab. Identifiziere alle relevanten Quellen. Identifiziere lieber eine Quelle zuviel als zu wenig.
+5. Mit RAGSource_toc das Inhaltsverzeichnis für ALLE Quellen aufrufen, die Du für relevant erachtest.
+6. Identifiziere aus den Inhaltsverzeichnissen alle relevanten Paragraphen und Abschnitte, die Du für relevant erachtest. Lieber ein paar §§ zuviel als zuwenig.
+7. RAGSource_get alle identifizierten Paragraphen bzw. Abschnitten aufrufen (small-Quellen: direkt komplett ohne TOC)
+8. Antwort ausschließlich auf Basis des geladenen Originalwortlauts formulieren. Etwaige Hinweise aus dem LLM-Wissen unbedingt als solche kennzeichnen.
+9. Falls Dir bei der Antwort auffällt, dass Du weitere Paragraphen oder Abschnitte brauchst, dann lade diese nach!
 
 Routing-Regel: size_class='small' → RAGSource_get direkt | 'medium'/'large' → zuerst RAGSource_toc
 

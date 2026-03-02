@@ -298,29 +298,29 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     this.server.tool(
       "RAGSource_catalog",
-      "Liefert das Verzeichnis aller verfuegbaren Rechtsquellen (Gesetze, Satzungen, Verordnungen) " +
-      "fuer eine bestimmte Gemeinde oder Region. " +
-      "Jeder Eintrag enthaelt id, titel, typ, ebene, size_class, toc_available und beschreibung. " +
-      "Routing-Regel: " +
-      "'small' → RAGSource_get direkt (gesamtes Dokument, wenige §§); " +
-      "'medium'/'large' → RAGSource_toc aufrufen — liefert bei toc_available=true das Inhaltsverzeichnis " +
-      "zur gezielten §-Auswahl, bei toc_available=false alle §§ direkt als Fallback (sections). " +
-      "Einmalig zu Beginn einer Session aufrufen; der Catalog aendert sich selten.",
+      "SCHRITT 1 — Immer zuerst aufrufen. " +
+      "Liefert alle verfuegbaren Rechtsquellen fuer eine Gemeinde/Region (Ortsrecht bis EU-Recht). " +
+      "Jeder Eintrag: id, titel, typ, ebene, size_class, toc_available, beschreibung. " +
+      "size_class bestimmt das weitere Vorgehen: " +
+      "'small' → RAGSource_get direkt aufrufen (komplettes Dokument, kein TOC noetig); " +
+      "'medium'/'large' → zuerst RAGSource_toc aufrufen, dann gezielte §§ per RAGSource_get laden. " +
+      "Gibt optional ein Feld 'system_message' zurueck — dieses immer zuerst ausgeben.",
       {
         geo: z
           .string()
           .optional()
           .describe(
-            "Geo-Filter: ARS-Code (2/5/9/12 Stellen) oder Klarname. " +
-            "2-stellig=Land, 5-stellig=Kreis, 9-stellig=Verband, 12-stellig=Gemeinde. " +
-            "Beispiele: '08', '08117', '081175009', '081175009012', 'Bad Boll'",
+            "ARS-Code (2/5/9/12 Stellen) oder Gemeindename. " +
+            "Bestimmt welche Rechtsebenen zurueckgegeben werden (Nur-aufwaerts-Prinzip). " +
+            "12-stellig=Gemeinde, 9-stellig=Verband, 5-stellig=Kreis, 2-stellig=Land. " +
+            "Beispiele: '081175009012' (Bad Boll), '08117' (LKR Goeppingen), '08' (BW).",
           ),
         projekt: z
           .string()
           .optional()
           .describe(
-            "Projekt-Slug fuer Mandanten-Filter, z.B. 'amtsschimmel' oder 'brandmeister'. " +
-            "Ohne Angabe werden alle Quellen zurueckgegeben.",
+            "Mandanten-Filter. Wird automatisch aus dem Host-Header erkannt — " +
+            "nur setzen wenn explizit ein anderes Projekt benoetigt wird.",
           ),
       },
       { title: "Quellen-Katalog abrufen", readOnlyHint: true, destructiveHint: false },
@@ -404,13 +404,12 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     this.server.tool(
       "RAGSource_toc",
-      "Liefert das Inhaltsverzeichnis einer oder mehrerer Rechtsquellen. " +
-      "Das Inhaltsverzeichnis enthaelt alle §§/Artikel mit Kurztiteln und optionalen Stichworten " +
-      "in Klammern, z.B. '§ 6 Aufgaben (Pflichtaufgaben, Mindeststärke)'. " +
-      "Nutze dieses Tool vor RAGSource_get, um gezielt relevante §§ zu identifizieren. " +
-      "Mehrere source_ids koennen in einem Aufruf abgefragt werden (Batch, max. 5). " +
-      "Falls kein Inhaltsverzeichnis vorhanden ist (toc: null), liefert das Tool bei small/medium-Quellen " +
-      "automatisch alle §§ im Feld 'sections' — kein extra RAGSource_get-Aufruf noetig.",
+      "SCHRITT 2 — Fuer 'medium'/'large'-Quellen aufrufen, bevor RAGSource_get verwendet wird. " +
+      "Liefert das Inhaltsverzeichnis mit allen §§/Artikeln und Kurztiteln, " +
+      "z.B. '§ 6 Aufgaben (Pflichtaufgaben, Mindeststaerke)'. " +
+      "Bis zu 5 Quellen gleichzeitig abfragen (Batch). " +
+      "Die section_ref-Werte aus dem TOC exakt so an RAGSource_get uebergeben. " +
+      "Falls toc=null: Tool liefert bei small/medium-Quellen automatisch alle §§ im Feld 'sections'.",
       {
         sources: z
           .array(z.string())
@@ -507,13 +506,12 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     this.server.tool(
       "RAGSource_get",
-      "Liefert den Originalwortlaut spezifischer Paragraphen einer Rechtsquelle. " +
-      "Wenn sections leer oder nicht angegeben: komplettes Dokument (alle §§). " +
-      "Empfehlung: Nur bei size_class='small' alle §§ auf einmal laden. " +
-      "Bei medium/large: gezielte §§ aus dem TOC auswaehlen (max. 15 pro Aufruf). " +
-      "section_ref exakt wie im TOC oder Catalog angegeben verwenden, " +
-      "z.B. '§ 2', 'Artikel 6', 'Erwägungsgrund 40'. " +
-      "Koennen weitere §§ bei Folgefragen nachgeladen werden.",
+      "SCHRITT 3 — Laedt den Originalwortlaut von Paragraphen aus einer Rechtsquelle. " +
+      "section_ref exakt wie im TOC angegeben verwenden, z.B. '§ 2', 'Artikel 6', 'Prod. Nr. 41.40.08'. " +
+      "Max. 15 §§ pro Aufruf; bei Bedarf mehrfach aufrufen. " +
+      "Fuer 'small'-Quellen: sections weglassen → liefert das komplette Dokument. " +
+      "Fuer 'medium'/'large': zuerst RAGSource_toc, dann gezielte §§ angeben. " +
+      "Liefert 'quelle_url' fuer Markdown-Links in der Antwort.",
       {
         source: z
           .string()
@@ -630,12 +628,10 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     this.server.tool(
       "RAGSource_query",
-      "Volltextsuche ueber alle Paragraphen. " +
-      "Convenience-Tool fuer einfache Anfragen oder wenn der agentic Flow " +
-      "(catalog → toc → get) nicht moeglich ist. " +
-      "Liefert direkt relevante Paragraphen mit Source-Kontext. " +
-      "Nutzt FTS5-Volltext-Suche auf Paragraphen-Ebene — praeziser als v1. " +
-      "Fuer komplexe oder große Quellen besser RAGSource_catalog → RAGSource_toc → RAGSource_get verwenden.",
+      "FALLBACK — nur verwenden wenn RAGSource_catalog keinen Treffer liefert oder die Quelle unklar ist. " +
+      "FTS5-Volltextsuche ueber alle indizierten Paragraphen. " +
+      "Liefert relevante Abschnitte mit Source-ID und section_ref als Kontext. " +
+      "Der Normalweg ist immer: RAGSource_catalog → RAGSource_toc → RAGSource_get.",
       {
         query: z
           .string()
