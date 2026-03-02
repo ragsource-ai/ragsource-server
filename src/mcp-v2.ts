@@ -22,8 +22,6 @@ import type {
   QueryHit,
 } from "./types-v2.js";
 import { resolveGeo, type ResolvedGeo } from "./engine/normalize.js";
-import masterpromptDefaultTemplate from "./prompts/masterprompt-default.md";
-import masterpromptAmtsschimmelTemplate from "./prompts/masterprompt-amtsschimmel.md";
 
 // -----------------------------------------------------------------------
 // Geo-Filter für die sources-Tabelle
@@ -169,45 +167,35 @@ function buildFtsQuery(input: string): string | null {
 }
 
 // -----------------------------------------------------------------------
-// Masterprompts (werden bei MCP-Initialize automatisch als instructions injiziert)
-// Quellen: src/prompts/*.md — dort bearbeiten, hier nur Platzhalter ersetzen
+// MCP Instructions (kurze projektspezifische Beschreibung für MCP-Initialize)
+// Vollständige Masterprompts → src/prompts/*.md (Claude.ai Projekt-System-Prompt)
 // -----------------------------------------------------------------------
 
-/** Generischer RAGSource-Masterprompt (Fallback wenn kein Projekt erkannt) */
-const MASTERPROMPT_DEFAULT = masterpromptDefaultTemplate.trimEnd();
-
-/** Persona-Beschreibung für den TON & PERSONA-Block (URL-Parameter ?rolle=) */
-const PERSONA_BESCHREIBUNG: Record<string, string> = {
-  "verwaltung":      "Für Verwaltungsmitarbeiter: fachlich und direkt, §§ im Vordergrund. Vollständige Paragrafen-Angaben.",
-  "buerger":         "Für Bürger: verständlich und handlungsorientiert erklären. Einfache Sprache, Handlungsschritte aufzeigen.",
-  "buergermeister":  "Für den Bürgermeister: Briefing-Stil, kurz und entscheidungsorientiert. Kernaussagen zuerst, §§ nachgelagert.",
-  "gemeinderat":     "Für den Gemeinderat: erklärend mit Hintergründen und Zusammenhängen, §§ vollständig zitieren.",
-};
+/** Generische Kurzbeschreibung (Fallback wenn kein Projekt erkannt) */
+const INSTRUCTIONS_DEFAULT =
+  "RAGSource — kommunale Wissensdatenbank (Gesetze, Satzungen, Verordnungen).\n" +
+  "Workflow: RAGSource_catalog → RAGSource_toc für medium/large-Quellen → RAGSource_get.\n" +
+  "RAGSource_query nur als Fallback.";
 
 /**
- * Baut den amtsschimmel.ai-Masterprompt mit dynamischem Geo (ARS) und Rolle.
- * Vorlage: src/prompts/masterprompt-amtsschimmel.md
- * @param geo  ARS-Code aus ?geo= URL-Parameter (z.B. "081175009012") oder null
- * @param rolle Rollen-Kürzel aus ?rolle= URL-Parameter (z.B. "verwaltung")
+ * Kurzbeschreibung für amtsschimmel.ai (mit optionalem geo-Hinweis).
+ * @param geo ARS-Code aus ?geo= URL-Parameter (z.B. "081175009012") oder null
  */
-function buildMasterpromptAmtsschimmel(geo: string | null, rolle: string): string {
-  const geoInstruction = geo
-    ? `Rufe RAGSource_catalog mit geo="${geo}" auf.\n   → liefert alle für diese Gemeinde geltenden Rechtsquellen (Ortsrecht bis Bundesrecht)`
-    : `Rufe RAGSource_catalog auf. Nutze den geo-Parameter entsprechend der angefragten Gemeinde.`;
-
-  const personaText = PERSONA_BESCHREIBUNG[rolle] ?? PERSONA_BESCHREIBUNG["verwaltung"];
-
-  return masterpromptAmtsschimmelTemplate
-    .replace("{{GEO_INSTRUCTION}}", geoInstruction)
-    .replace("{{PERSONA_TEXT}}", personaText)
-    .trimEnd();
+function buildInstructionsAmtsschimmel(geo: string | null): string {
+  const geoHint = geo ? ` (geo="${geo}")` : "";
+  return (
+    "amtsschimmel.ai — kommunale Wissensdatenbank (powered by RAGSource).\n" +
+    `Workflow: RAGSource_catalog${geoHint} → RAGSource_toc für medium/large-Quellen` +
+    " → RAGSource_get für Originalwortlaut und Einzelparagrafen aus ToC.\n" +
+    "RAGSource_query nur als Fallback."
+  );
 }
 
-/** Mappt Projekt-Slugs auf ihre Masterprompt-Builder-Funktionen */
-type MasterpromptBuilder = (geo: string | null, rolle: string) => string;
+/** Mappt Projekt-Slugs auf ihre Instructions-Builder-Funktionen */
+type InstructionsBuilder = (geo: string | null) => string;
 
-const MASTERPROMPT_BUILDERS: Record<string, MasterpromptBuilder> = {
-  "amtsschimmel": buildMasterpromptAmtsschimmel,
+const INSTRUCTIONS_BUILDERS: Record<string, InstructionsBuilder> = {
+  "amtsschimmel": buildInstructionsAmtsschimmel,
 };
 
 // -----------------------------------------------------------------------
@@ -241,10 +229,8 @@ function resolveProjekt(explicitProjekt: string | undefined): string | undefined
 export class RAGSourceMCPv2 extends McpAgent<Env> {
   /** Host des eingehenden Requests — wird in fetch() gesetzt, bevor init() läuft */
   private _currentHost: string = "";
-  /** Geo-Parameter aus der MCP-URL (?geo=...) — leer = kein Geo-Filter im Masterprompt */
+  /** Geo-Parameter aus der MCP-URL (?geo=...) — für geo-Hinweis in Instructions */
   private _currentGeo: string = "";
-  /** Rollen-Parameter aus der MCP-URL (?rolle=...) — Default: "verwaltung" */
-  private _currentRolle: string = "verwaltung";
 
   /**
    * Placeholder-Server (nötig weil McpAgent die Property beim Start liest).
@@ -252,26 +238,23 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
    */
   server = new McpServer(
     { name: "RAGSource", version: "2.0.0" },
-    { instructions: MASTERPROMPT_DEFAULT },
+    { instructions: INSTRUCTIONS_DEFAULT },
   );
 
   /**
-   * Überschreibt den DO-fetch, um den Host-Header zu erfassen,
-   * bevor init() den Server mit dem passenden Masterprompt erstellt.
+   * Überschreibt den DO-fetch, um Host und geo-Parameter zu erfassen,
+   * bevor init() den projekt-spezifischen Instructions-Text erstellt.
    */
   override async fetch(request: Request): Promise<Response> {
     // Der agents SDK übernimmt den originalen Host als URL-Hostname des internen DO-Requests.
     // Host-Header selbst wird dabei gestrippt — URL-Hostname ist die zuverlässige Quelle.
-    // URL-Parameter (?geo=, ?rolle=) werden vom SDK ebenfalls durchgereicht.
     try {
       const url = new URL(request.url);
       this._currentHost = url.hostname;
       this._currentGeo = url.searchParams.get("geo") ?? "";
-      this._currentRolle = url.searchParams.get("rolle") ?? "verwaltung";
     } catch {
       this._currentHost = "";
       this._currentGeo = "";
-      this._currentRolle = "verwaltung";
     }
     return super.fetch(request);
   }
@@ -280,13 +263,11 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // Projekt aus Host ableiten
     const projekt = PROJEKT_BY_HOST[this._currentHost];
 
-    // Masterprompt bauen: projekt-spezifischer Builder oder generischer Default.
+    // Kurze Instructions bauen: projekt-spezifischer Builder oder generischer Default.
     // geo wird als ARS-Code (Raw aus ?geo= URL-Param) direkt übergeben — kein resolveGeo nötig.
     const geo = this._currentGeo || null;
-    const builder = projekt ? MASTERPROMPT_BUILDERS[projekt] : undefined;
-    const instructions = builder
-      ? builder(geo, this._currentRolle)
-      : MASTERPROMPT_DEFAULT;
+    const builder = projekt ? INSTRUCTIONS_BUILDERS[projekt] : undefined;
+    const instructions = builder ? builder(geo) : INSTRUCTIONS_DEFAULT;
 
     this.server = new McpServer(
       { name: "RAGSource", version: "2.0.0" },
