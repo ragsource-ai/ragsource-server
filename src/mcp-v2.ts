@@ -279,7 +279,8 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     this.server.tool(
       "RAGSource_catalog",
-      "SCHRITT 1 — Immer zuerst aufrufen. " +
+      "Pflichtaufruf zu Beginn jeder Anfrage — Einstiegspunkt fuer alle Rechts-, Satzungs- und " +
+      "Verwaltungsfragen (Baurecht, Gemeindeordnung, Satzungen, Gebuehren, Foerderung, u.v.m.). " +
       "Liefert alle verfuegbaren Rechtsquellen fuer eine Gemeinde/Region (Ortsrecht bis EU-Recht). " +
       "Jeder Eintrag: id, titel, typ, ebene, size_class, toc_available, beschreibung. " +
       "size_class bestimmt das weitere Vorgehen: " +
