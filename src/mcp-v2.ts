@@ -306,7 +306,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             "nur setzen wenn explizit ein anderes Projekt benoetigt wird.",
           ),
       },
-      { title: "Quellen-Katalog abrufen", readOnlyHint: true, destructiveHint: false },
+      { title: "RAGSource catalog", readOnlyHint: true, destructiveHint: false },
       async ({ geo: geoInput, projekt: projektInput }) => {
         const db = this.env.DB;
 
@@ -411,7 +411,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             "Ohne Angabe: 'gesamt'.",
           ),
       },
-      { title: "Inhaltsverzeichnis abrufen", readOnlyHint: true, destructiveHint: false },
+      { title: "RAGSource toc", readOnlyHint: true, destructiveHint: false },
       async ({ sources: sourceIds, level }) => {
         const db = this.env.DB;
         const targetLevel = level ?? "gesamt";
@@ -520,7 +520,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             "Max. 8 Quellen, max. 25 §§ je Quelle, max. 50 §§ gesamt pro Aufruf.",
           ),
       },
-      { title: "Paragraphen abrufen", readOnlyHint: true, destructiveHint: false },
+      { title: "RAGSource get", readOnlyHint: true, destructiveHint: false },
       async ({ sources: sourceRequests }) => {
         const db = this.env.DB;
 
@@ -676,7 +676,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             "Optionale Zusatz-Suchbegriffe: Synonyme, Fachbegriffe, verwandte Begriffe",
           ),
       },
-      { title: "Volltext-Suche", readOnlyHint: true, destructiveHint: false },
+      { title: "RAGSource query", readOnlyHint: true, destructiveHint: false },
       async ({ query, geo: geoInput, projekt: projektInput, hints }) => {
         const db = this.env.DB;
 
