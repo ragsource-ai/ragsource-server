@@ -77,22 +77,47 @@ console.log(`🗄️  Datenbank: ${DB_NAME}`);
 // -----------------------------------------------------------------------
 
 /**
- * SQL-Escaping: Single quotes werden via char(39) umgangen,
- * weil wrangler's splitSqlIntoStatements '' (doppeltes Hochkomma)
- * nicht korrekt als escaped quote erkennt und falsch splittet.
- * SQLite: 'part1' || char(39) || 'part2' = 'part1'part2'
+ * SQL-Escaping: Zwei bekannte wrangler-Parser-Bugs werden umgangen:
+ *
+ * 1. '' (doppeltes Hochkomma): wrangler's splitSqlIntoStatements erkennt
+ *    es nicht korrekt als escaped quote → Statements werden falsch getrennt.
+ *    Fix: char(39) statt '' verwenden.
+ *    SQLite: 'part1' || char(39) || 'part2' = 'part1'part2'
+ *
+ * 2. -- (zwei Bindestriche) innerhalb eines SQL-Strings: wrangler's Parser
+ *    behandelt -- als Kommentar-Start, auch innerhalb quoted strings
+ *    (z.B. "§§ 178 und 179 ----" in VwGO-Sections).
+ *    Fix: -- aufspalten via char(45) || char(45).
+ *    SQLite: 'a' || char(45) || char(45) || 'b' = 'a--b'
  */
 function esc(val: unknown): string {
   if (val == null) return "NULL";
   const s = String(val);
-  if (!s.includes("'")) return "'" + s + "'";
-  // Apostrophe mit char(39) umgehen
-  return s.split("'").map(p => "'" + p + "'").join(" || char(39) || ");
+  if (!s.includes("'") && !s.includes("--")) return "'" + s + "'";
+  // Erst auf -- splitten, dann innerhalb jedes Teils ' mit char(39) escapen
+  return s.split("--")
+    .map(part => part.split("'").map(p => "'" + p + "'").join(" || char(39) || "))
+    .join(" || char(45) || char(45) || ");
 }
 
 /** Schätzt Token-Anzahl: 1 Token ≈ 4 Zeichen (englisch/deutsch) */
 function estimateTokens(text: string): number {
   return Math.round(text.length / 4);
+}
+
+/** Führt einen Shell-Befehl aus, mit bis zu `retries` Versuchen bei Fehler. */
+function execWithRetry(cmd: string, opts: Parameters<typeof execSync>[1], retries = 3): void {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      execSync(cmd, opts);
+      return;
+    } catch (e) {
+      if (attempt === retries) throw e;
+      process.stdout.write(` ↩ Retry ${attempt}/${retries - 1}... `);
+      // Kurze Pause (2 s) via SharedArrayBuffer — Node.js sync sleep ohne externe Deps
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
+    }
+  }
 }
 
 /** Bestimmt size_class anhand des Token-Counts */
@@ -546,10 +571,10 @@ for (const batch of batches) {
   process.stdout.write(`  Batch ${batchNum}/${batches.length}... `);
   writeFileSync(sqlFile, batch.join("\n"), "utf-8");
   try {
-    execSync(`npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-seed-v2.sql`, {
-      cwd: schemaDir,
-      stdio: "pipe",
-    });
+    execWithRetry(
+      `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-seed-v2.sql`,
+      { cwd: schemaDir, stdio: "pipe" },
+    );
     process.stdout.write("✅\n");
   } catch (e) {
     process.stdout.write("❌\n");

@@ -73,11 +73,17 @@ function findMarkdownFiles(dir: string): string[] {
   return files;
 }
 
-// SQL-Escaping
+/**
+ * SQL-Escaping: Single quotes werden via char(39) umgangen,
+ * weil wrangler's splitSqlIntoStatements '' (doppeltes Hochkomma)
+ * nicht korrekt als escaped quote erkennt und Statements falsch zusammenmergt
+ * → SQLITE_TOOBIG. Identischer Fix wie in build-db-v2.ts.
+ */
 function esc(val: unknown): string {
   if (val == null) return "NULL";
   const s = val instanceof Date ? val.toISOString().slice(0, 10) : String(val);
-  return "'" + s.replace(/'/g, "''") + "'";
+  if (!s.includes("'")) return "'" + s + "'";
+  return s.split("'").map(p => "'" + p + "'").join(" || char(39) || ");
 }
 
 // Alle Dateien aus allen Content-Roots sammeln (mit zugehörigem Root)
