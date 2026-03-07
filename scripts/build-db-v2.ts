@@ -79,25 +79,40 @@ console.log(`🗄️  Datenbank: ${DB_NAME}`);
 /**
  * SQL-Escaping: Zwei bekannte wrangler-Parser-Bugs werden umgangen:
  *
- * 1. '' (doppeltes Hochkomma): wrangler's splitSqlIntoStatements erkennt
- *    es nicht korrekt als escaped quote → Statements werden falsch getrennt.
- *    Fix: char(39) statt '' verwenden.
- *    SQLite: 'part1' || char(39) || 'part2' = 'part1'part2'
+ * 1. '' → char(39): wrangler's splitSqlIntoStatements behandelt '' falsch
+ *    → Statements werden zusammengemergt → SQLITE_TOOBIG.
  *
- * 2. -- (zwei Bindestriche) innerhalb eines SQL-Strings: wrangler's Parser
- *    behandelt -- als Kommentar-Start, auch innerhalb quoted strings
- *    (z.B. "§§ 178 und 179 ----" in VwGO-Sections).
- *    Fix: -- aufspalten via char(45) || char(45).
- *    SQLite: 'a' || char(45) || char(45) || 'b' = 'a--b'
+ * 2. -- → char(45,45): wrangler's Parser behandelt -- als Kommentar-Start,
+ *    auch innerhalb quoted strings (z.B. "§§ 178 ----" in VwGO-Sections).
+ *
+ * Lineare || -Ketten würden bei Texten mit vielen Sonderzeichen SQLite's
+ * SQLITE_EXPR_DEPTH_MAX (100) überschreiten (z.B. "§§ 1 -- 3"-Bereiche im SGB).
+ * Fix: balancierter Binärbaum → Tiefe O(log N) statt O(N).
  */
+function buildConcatTree(tokens: string[]): string {
+  if (tokens.length === 0) return "''";
+  if (tokens.length === 1) return tokens[0];
+  const mid = Math.floor(tokens.length / 2);
+  return `(${buildConcatTree(tokens.slice(0, mid))} || ${buildConcatTree(tokens.slice(mid))})`;
+}
+
 function esc(val: unknown): string {
   if (val == null) return "NULL";
   const s = String(val);
   if (!s.includes("'") && !s.includes("--")) return "'" + s + "'";
-  // Erst auf -- splitten, dann innerhalb jedes Teils ' mit char(39) escapen
-  return s.split("--")
-    .map(part => part.split("'").map(p => "'" + p + "'").join(" || char(39) || "))
-    .join(" || char(45) || char(45) || ");
+
+  // Token-Liste: Textteile + char(39) für ' + char(45,45) für --
+  const tokens: string[] = [];
+  const dashParts = s.split("--");
+  for (let i = 0; i < dashParts.length; i++) {
+    if (i > 0) tokens.push("char(45,45)");
+    const apoParts = dashParts[i].split("'");
+    for (let j = 0; j < apoParts.length; j++) {
+      if (j > 0) tokens.push("char(39)");
+      tokens.push(`'${apoParts[j]}'`);
+    }
+  }
+  return buildConcatTree(tokens);
 }
 
 /** Schätzt Token-Anzahl: 1 Token ≈ 4 Zeichen (englisch/deutsch) */
