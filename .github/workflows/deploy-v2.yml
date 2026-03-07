@@ -37,6 +37,7 @@ jobs:
         working-directory: ragsource-server
 
       - name: DB v2 seeden (remote D1)
+        continue-on-error: true
         run: |
           npx tsx scripts/build-db-v2.ts --remote \
             --content-root=$GITHUB_WORKSPACE/ragsource-content/regelungsrahmen
