@@ -391,6 +391,12 @@ try {
 }
 if (existsSync(dropFile)) unlinkSync(dropFile);
 
+// Remote D1 benötigt nach DROP etwas Zeit, um den Durable Object zurückzusetzen
+if (isRemote) {
+  console.log("  ⏳ Warte 10s auf D1 DO-Reset...");
+  execSync("sleep 10");
+}
+
 const schemaOutFile = join(schemaDir, ".build-schema-v2.sql");
 writeFileSync(schemaOutFile, schemaSql, "utf-8");
 try {
