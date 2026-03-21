@@ -60,6 +60,7 @@ const SECTION_START_RE = /^#{2,6}\s+(?:§\s*\d+[a-z]?|Artikel\s+\d+[a-z]?|Art\.\
 const args = process.argv.slice(2);
 const isRemote = args.includes("--remote");
 const mode = isRemote ? "--remote" : "--local";
+const skipGemeinden = args.includes("--skip-gemeinden");
 
 const contentRoots = args
   .filter((a) => a.startsWith("--content-root="))
@@ -73,6 +74,7 @@ if (contentRoots.length === 0) {
 console.log(`📂 Content-Roots: ${contentRoots.join(", ")}`);
 console.log(`💾 Modus: ${mode}`);
 console.log(`🗄️  Datenbank: ${DB_NAME}`);
+if (skipGemeinden) console.log(`⏭️  --skip-gemeinden: Gemeinden-Tabelle wird nicht angefasst.`);
 
 // -----------------------------------------------------------------------
 // Hilfsfunktionen
@@ -395,8 +397,10 @@ const schemaDrop = [
   "DROP TABLE IF EXISTS source_tocs;",
   "DROP TABLE IF EXISTS source_projekte;",
   "DROP TABLE IF EXISTS sources;",
-  "DROP TABLE IF EXISTS gemeinden;",
-  "DROP TABLE IF EXISTS geo_aliases;",
+  ...(skipGemeinden ? [] : [
+    "DROP TABLE IF EXISTS gemeinden;",
+    "DROP TABLE IF EXISTS geo_aliases;",
+  ]),
 ].join("\n");
 
 const schemaDir = join(import.meta.dirname!, "..");
@@ -449,42 +453,46 @@ if (isRemote) {
 // Gemeinde-Seed: alle 10.944 deutschen Gemeinden aus Destatis GV-ISys
 // -----------------------------------------------------------------------
 
-const gemeindenSeedFile = join(schemaDir, "data", "seed-gemeinden-all.sql");
-if (existsSync(gemeindenSeedFile)) {
-  const gemeindenSql = readFileSync(gemeindenSeedFile, "utf-8");
-  const gemeindenStatements = gemeindenSql
-    .split("\n")
-    .filter((l) => l.startsWith("INSERT"));
-
-  const gemeindenBatches: string[][] = [];
-  for (let i = 0; i < gemeindenStatements.length; i += BATCH_SIZE) {
-    gemeindenBatches.push(gemeindenStatements.slice(i, i + BATCH_SIZE));
-  }
-
-  console.log(`\n🏘️  Gemeinden-Seed (${gemeindenStatements.length} Einträge, ${gemeindenBatches.length} Batches)...`);
-  const gemeindenFile = join(schemaDir, ".build-gemeinden-v2.sql");
-  let gBatchNum = 0;
-  for (const batch of gemeindenBatches) {
-    gBatchNum++;
-    process.stdout.write(`  Batch ${gBatchNum}/${gemeindenBatches.length}... `);
-    writeFileSync(gemeindenFile, batch.join("\n"), "utf-8");
-    try {
-      execWithRetry(
-        `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-gemeinden-v2.sql`,
-        { cwd: schemaDir, stdio: "pipe" },
-      );
-      process.stdout.write("✅\n");
-    } catch (e) {
-      process.stdout.write("❌\n");
-      console.error(`❌ Fehler in Gemeinden-Batch ${gBatchNum}:`, e);
-      if (existsSync(gemeindenFile)) unlinkSync(gemeindenFile);
-      process.exit(1);
-    }
-  }
-  if (existsSync(gemeindenFile)) unlinkSync(gemeindenFile);
-  console.log("  Gemeinden-Seed ✅\n");
+if (skipGemeinden) {
+  console.log("⏭️  Gemeinden-Seed übersprungen (--skip-gemeinden).\n");
 } else {
-  console.log("  ⚠️  data/seed-gemeinden-all.sql nicht gefunden — nur die 7 Einträge aus schema.sql.\n");
+  const gemeindenSeedFile = join(schemaDir, "data", "seed-gemeinden-all.sql");
+  if (existsSync(gemeindenSeedFile)) {
+    const gemeindenSql = readFileSync(gemeindenSeedFile, "utf-8");
+    const gemeindenStatements = gemeindenSql
+      .split("\n")
+      .filter((l) => l.startsWith("INSERT"));
+
+    const gemeindenBatches: string[][] = [];
+    for (let i = 0; i < gemeindenStatements.length; i += BATCH_SIZE) {
+      gemeindenBatches.push(gemeindenStatements.slice(i, i + BATCH_SIZE));
+    }
+
+    console.log(`\n🏘️  Gemeinden-Seed (${gemeindenStatements.length} Einträge, ${gemeindenBatches.length} Batches)...`);
+    const gemeindenFile = join(schemaDir, ".build-gemeinden-v2.sql");
+    let gBatchNum = 0;
+    for (const batch of gemeindenBatches) {
+      gBatchNum++;
+      process.stdout.write(`  Batch ${gBatchNum}/${gemeindenBatches.length}... `);
+      writeFileSync(gemeindenFile, batch.join("\n"), "utf-8");
+      try {
+        execWithRetry(
+          `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-gemeinden-v2.sql`,
+          { cwd: schemaDir, stdio: "pipe" },
+        );
+        process.stdout.write("✅\n");
+      } catch (e) {
+        process.stdout.write("❌\n");
+        console.error(`❌ Fehler in Gemeinden-Batch ${gBatchNum}:`, e);
+        if (existsSync(gemeindenFile)) unlinkSync(gemeindenFile);
+        process.exit(1);
+      }
+    }
+    if (existsSync(gemeindenFile)) unlinkSync(gemeindenFile);
+    console.log("  Gemeinden-Seed ✅\n");
+  } else {
+    console.log("  ⚠️  data/seed-gemeinden-all.sql nicht gefunden — nur die 7 Einträge aus schema.sql.\n");
+  }
 }
 
 // -----------------------------------------------------------------------

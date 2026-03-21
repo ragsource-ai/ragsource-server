@@ -1,15 +1,23 @@
 name: Deploy Worker (main geaendert)
 
-# Laeuft nur bei Aenderungen am main Branch.
-# Seeded die DB neu UND deployt den Worker.
+# Laeuft nur bei Aenderungen an Worker-Code oder Schema.
+# Bei reinen Code-Aenderungen (src/, wrangler.jsonc etc.): nur Worker deployen.
+# Bei Schema-Aenderung (schema.sql): DB vollstaendig neu bauen (inkl. Gemeinden) + Worker deployen.
+# Bei Doku-/README-Aenderungen: wird nicht ausgeloest.
 
 on:
   push:
     branches: [main]
+    paths:
+      - 'src/**'
+      - 'schema.sql'
+      - 'wrangler.jsonc'
+      - 'package.json'
+      - 'package-lock.json'
 
 jobs:
   deploy:
-    name: DB seeden + Worker deployen
+    name: Worker deployen
     runs-on: ubuntu-latest
 
     steps:
@@ -17,8 +25,21 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: ragsource-server
+          fetch-depth: 2
 
-      - name: Checkout ragsource-content (Regelungsrahmen, Saeule 1)
+      - name: Schema-Aenderung pruefen
+        id: detect
+        run: |
+          if git -C ragsource-server diff --name-only HEAD~1 HEAD | grep -q '^schema\.sql$'; then
+            echo "schema_changed=true" >> $GITHUB_OUTPUT
+            echo "schema.sql geaendert → vollstaendiger DB-Rebuild wird durchgefuehrt."
+          else
+            echo "schema_changed=false" >> $GITHUB_OUTPUT
+            echo "Kein Schema-Aenderung → nur Worker deployen, kein DB-Rebuild."
+          fi
+
+      - name: Checkout ragsource-content (nur bei Schema-Aenderung)
+        if: steps.detect.outputs.schema_changed == 'true'
         uses: actions/checkout@v4
         with:
           repository: ragsource-ai/ragsource-content
@@ -36,7 +57,8 @@ jobs:
         run: npm ci
         working-directory: ragsource-server
 
-      - name: DB seeden (remote D1)
+      - name: DB vollstaendig neu bauen (nur bei Schema-Aenderung)
+        if: steps.detect.outputs.schema_changed == 'true'
         run: |
           npx tsx scripts/build-db-v2.ts --remote \
             --content-root=$GITHUB_WORKSPACE/ragsource-content/regelungsrahmen

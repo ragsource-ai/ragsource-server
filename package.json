@@ -9,7 +9,8 @@
     "db:init:local": "wrangler d1 execute ragsource-db-v2 --local --file=schema.sql",
     "db:init:remote": "wrangler d1 execute ragsource-db-v2 --remote --file=schema.sql",
     "db:seed:local": "tsx scripts/build-db-v2.ts --local",
-    "db:seed:remote": "tsx scripts/build-db-v2.ts --remote"
+    "db:seed:remote": "tsx scripts/build-db-v2.ts --remote",
+    "db:seed:remote:content": "tsx scripts/build-db-v2.ts --remote --skip-gemeinden"
   },
   "dependencies": {
     "agents": "^0.7.9",
