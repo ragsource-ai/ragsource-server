@@ -429,64 +429,77 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
       async ({ sources: sourceIds, level }) => {
         const db = this.env.DB;
         const targetLevel = level ?? "gesamt";
+        const ph = sourceIds.map(() => "?").join(", ");
 
-        const results: TocResult[] = [];
+        // 1. Alle Quellen in einem Query laden
+        const sourcesResult = await db
+          .prepare(
+            `SELECT id, titel, kurzbezeichnung, size_class, section_count FROM sources WHERE id IN (${ph})`,
+          )
+          .bind(...sourceIds)
+          .all<Pick<Source, "id" | "titel" | "kurzbezeichnung" | "size_class" | "section_count">>();
+        const sourceMap = new Map(
+          (sourcesResult.results ?? []).map((s) => [s.id, s]),
+        );
 
-        for (const sourceId of sourceIds) {
-          // Quell-Metadaten laden
-          const source = await db
+        // 2. Alle TOCs in einem Query laden
+        const tocsResult = await db
+          .prepare(
+            `SELECT source_id, content FROM source_tocs WHERE source_id IN (${ph}) AND toc_level = ?`,
+          )
+          .bind(...sourceIds, targetLevel)
+          .all<{ source_id: string; content: string }>();
+        const tocMap = new Map(
+          (tocsResult.results ?? []).map((t) => [t.source_id, t.content]),
+        );
+
+        // 3. Für small/medium-Quellen ohne TOC: alle §§ in einem Query laden (Fallback)
+        const needsSections = sourceIds.filter((id) => {
+          const src = sourceMap.get(id);
+          return src && !tocMap.has(id) && src.size_class !== "large";
+        });
+        const sectionsMap = new Map<string, SectionResult[]>();
+        if (needsSections.length > 0) {
+          const secPh = needsSections.map(() => "?").join(", ");
+          const secResult = await db
             .prepare(
-              "SELECT id, titel, kurzbezeichnung, size_class, section_count FROM sources WHERE id = ?",
+              `SELECT source_id, section_ref, heading, body FROM source_sections WHERE source_id IN (${secPh}) ORDER BY source_id, sort_order`,
             )
-            .bind(sourceId)
-            .first<Pick<Source, "id" | "titel" | "kurzbezeichnung" | "size_class" | "section_count">>();
+            .bind(...needsSections)
+            .all<Pick<SourceSection, "section_ref" | "heading" | "body"> & { source_id: string }>();
+          for (const r of secResult.results ?? []) {
+            if (!sectionsMap.has(r.source_id)) sectionsMap.set(r.source_id, []);
+            sectionsMap.get(r.source_id)!.push({
+              ref: r.section_ref,
+              heading: r.heading,
+              body: r.body,
+            });
+          }
+        }
 
+        // 4. Ergebnisse in der Reihenfolge der Eingabe zusammenbauen
+        const results: TocResult[] = sourceIds.map((id) => {
+          const source = sourceMap.get(id);
           if (!source) {
-            results.push({
-              source_id: sourceId,
+            return {
+              source_id: id,
               titel: "(nicht gefunden)",
               size_class: "unknown",
               section_count: 0,
               toc: null,
-            });
-            continue;
+            };
           }
-
-          // TOC laden
-          const tocRow = await db
-            .prepare(
-              "SELECT content FROM source_tocs WHERE source_id = ? AND toc_level = ?",
-            )
-            .bind(sourceId, targetLevel)
-            .first<{ content: string }>();
-
-          const toc = tocRow?.content ?? null;
-
-          // Kein TOC + small/medium → alle §§ direkt mitliefern (spart Extra-Aufruf)
-          let sectionsFallback: SectionResult[] | undefined;
-          if (!toc && source.size_class !== "large") {
-            const rows = await db
-              .prepare(
-                "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? ORDER BY sort_order",
-              )
-              .bind(sourceId)
-              .all<Pick<SourceSection, "section_ref" | "heading" | "body">>();
-            sectionsFallback = (rows.results ?? []).map((r) => ({
-              ref: r.section_ref,
-              heading: r.heading,
-              body: r.body,
-            }));
-          }
-
-          results.push({
+          const toc = tocMap.get(id) ?? null;
+          const sections = sectionsMap.get(id);
+          return {
             source_id: source.id,
             titel: source.titel,
             size_class: source.size_class,
             section_count: source.section_count,
             toc,
-            ...(sectionsFallback !== undefined && { sections: sectionsFallback }),
-          });
-        }
+            ...(sections !== undefined && { sections }),
+          };
+        });
 
         return {
           content: [

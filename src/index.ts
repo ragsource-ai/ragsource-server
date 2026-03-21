@@ -24,6 +24,7 @@ function createApp() {
     // Schneller DB-Check: Anzahl der Quellen
     let sourceCount = 0;
     let sectionCount = 0;
+    let dbError = false;
     try {
       const row = await c.env.DB.prepare(
         "SELECT COUNT(*) as n FROM sources",
@@ -35,7 +36,19 @@ function createApp() {
       ).first<{ n: number }>();
       sectionCount = secRow?.n ?? 0;
     } catch {
-      // DB noch nicht bereit
+      dbError = true;
+    }
+
+    if (dbError) {
+      return c.json(
+        {
+          status: "degraded",
+          version: "2.0.0",
+          db: { error: true },
+          timestamp: new Date().toISOString(),
+        },
+        503,
+      );
     }
 
     return c.json({
@@ -72,6 +85,25 @@ export default {
 
     // MCP-Endpunkt → McpAgent (Durable Objects)
     if (url.pathname === "/mcp" || url.pathname.startsWith("/mcp/")) {
+      // Rate-Limiting: max. 60 Requests/Minute pro IP (Preflight ausgenommen)
+      if (request.method !== "OPTIONS") {
+        const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
+        const { success } = await env.RATE_LIMITER.limit({ key: ip });
+        if (!success) {
+          return new Response(
+            JSON.stringify({ error: "Too Many Requests", retry_after: 60 }),
+            {
+              status: 429,
+              headers: {
+                "Content-Type": "application/json",
+                "Retry-After": "60",
+                "Access-Control-Allow-Origin": "*",
+              },
+            },
+          );
+        }
+      }
+
       // CORS-Preflight (ChatGPT, Cursor, andere Browser-Clients)
       if (request.method === "OPTIONS") {
         return new Response(null, {

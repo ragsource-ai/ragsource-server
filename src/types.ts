@@ -4,10 +4,15 @@
 // Cloudflare Workers Bindings
 // -----------------------------------------------------------------------
 
+export interface RateLimiter {
+  limit(opts: { key: string }): Promise<{ success: boolean }>;
+}
+
 export interface Env {
   DB: D1Database;
   MCP_OBJECT: DurableObjectNamespace;
   CONFIG: KVNamespace;
+  RATE_LIMITER: RateLimiter;
 }
 
 // -----------------------------------------------------------------------

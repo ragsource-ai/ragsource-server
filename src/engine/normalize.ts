@@ -77,6 +77,9 @@ async function resolveArsUpward(
 ): Promise<ResolvedGeo | null> {
   const len = ars.length;
 
+  // Ungültige ARS-Länge → sofort abbrechen, keine DB-Lookups nötig
+  if (len !== 2 && len !== 5 && len !== 9 && len !== 12) return null;
+
   if (len === 12) {
     // Gemeinde → volle Auflösung über gemeinden-Tabelle
     const row = await db
@@ -162,31 +165,27 @@ async function resolveArsUpward(
     };
   }
 
-  if (len === 2) {
-    // Land → nur land_ars, Name aus gemeinden-Tabelle
-    const row = await db
-      .prepare("SELECT land FROM gemeinden WHERE land_ars = ? LIMIT 1")
-      .bind(ars)
-      .first<{ land: string }>();
-    if (!row) return null;
+  // len === 2
+  // Land → nur land_ars, Name aus gemeinden-Tabelle
+  const row = await db
+    .prepare("SELECT land FROM gemeinden WHERE land_ars = ? LIMIT 1")
+    .bind(ars)
+    .first<{ land: string }>();
+  if (!row) return null;
 
-    return {
-      level: "land",
-      land_ars: ars,
-      kreis_ars: null,
-      verband_ars: null,
-      gemeinde_ars: null,
-      display: {
-        name: row.land,
-        verband: null,
-        kreis: null,
-        land: row.land,
-      },
-    };
-  }
-
-  // Ungültige ARS-Länge
-  return null;
+  return {
+    level: "land",
+    land_ars: ars,
+    kreis_ars: null,
+    verband_ars: null,
+    gemeinde_ars: null,
+    display: {
+      name: row.land,
+      verband: null,
+      kreis: null,
+      land: row.land,
+    },
+  };
 }
 
 /**
