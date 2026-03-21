@@ -207,6 +207,15 @@ for (const { file, root } of mdFilesWithRoot) {
   }
 
   const content = parsed.content.trim();
+
+  // v2-Format erkennen (eine Datei pro Gesetz mit ## Inhaltsverzeichnis):
+  // Diese Dateien sind zu groß für D1's Statement-Limit und gehören
+  // in die v2-Pipeline (build-db-v2.ts). In v1 überspringen.
+  if (content.includes("## Inhaltsverzeichnis")) {
+    console.log(`  ⏭️  Übersprungen (v2-Format): ${file}`);
+    continue;
+  }
+
   const tokenCount = Math.round(content.length / 4);
   const dateipfad = relative(root, file).replace(/\\/g, "/");
 
