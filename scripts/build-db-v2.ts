@@ -157,12 +157,10 @@ async function fetchD1Batch(statements: string[]): Promise<void> {
       "Für --remote werden CLOUDFLARE_ACCOUNT_ID und CLOUDFLARE_API_TOKEN als Env-Variablen benötigt.",
     );
   }
-  // D1 Batch-API: Array von { sql, params } — statements ohne trailing ;
-  const body = statements.map((sql) => ({
-    sql: sql.trimEnd().replace(/;$/, ""),
-    params: [] as never[],
-  }));
-  const url = `${CF_API_BASE}/accounts/${accountId}/d1/database/${D1_DB_ID}/batch`;
+  // D1 /query-API: alle Statements als ein SQL-String (SQLite exec unterstützt mehrere Statements)
+  const sql = statements.map((s) => s.trimEnd().replace(/;$/, "")).join(";\n") + ";";
+  const body = { sql, params: [] as never[] };
+  const url = `${CF_API_BASE}/accounts/${accountId}/d1/database/${D1_DB_ID}/query`;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const res = await fetch(url, {
