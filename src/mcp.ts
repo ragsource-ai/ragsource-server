@@ -313,8 +313,11 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
       async ({ geo: geoInput, projekt: projektInput }) => {
         const db = this.env.DB;
 
-        // KV: Broadcast-Nachricht (Wartung, Updates) — null wenn nicht gesetzt
-        const systemMessage = await this.env.CONFIG.get("system_message");
+        // KV: Broadcast-Nachricht (Wartung, Updates) + Nicht-konfiguriert-Meldung
+        const [systemMessage, notConfiguredMessage] = await Promise.all([
+          this.env.CONFIG.get("system_message"),
+          this.env.CONFIG.get("not_configured_message"),
+        ]);
 
         // Geo auflösen; URL-?geo= als Session-Default wenn kein expliziter Parameter
         const effectiveGeo = geoInput ?? sessionGeo;
@@ -368,6 +371,18 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           ? { name: geo.display.name, level: geo.level }
           : { name: "alle Ebenen", level: "alle" };
 
+        // Nicht-konfiguriert-Fall: Gemeinde-Ebene angefragt, aber keine Gemeinde-Quellen vorhanden.
+        // Übergeordnete Quellen (Land, Kreis, Verband) können trotzdem vorhanden sein → werden angezeigt.
+        const notConfigured =
+          geo?.level === "gemeinde" &&
+          !catalog.some((s) => s.ebene === "gemeinde");
+        const notConfiguredHinweis = notConfigured
+          ? (notConfiguredMessage ??
+              `Hinweis an den Assistenten: Die Gemeinde ${geoInfo.name} ist noch nicht als eigenständige Rechtsquelle hinterlegt. ` +
+              `Es werden nur übergeordnete Regelungen angezeigt (z.B. Landes-, Kreis- oder Verbandsrecht — bitte konkret aus dem Catalog benennen). ` +
+              `Weise den Nutzer darauf hin, dass gemeindespezifische Satzungen fehlen und die Gemeinde noch nicht aufgenommen wurde.`)
+          : undefined;
+
         return {
           content: [
             {
@@ -377,6 +392,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
                   ...(systemMessage && { system_message: systemMessage }),
                   geo: geoInfo,
                   total: catalog.length,
+                  ...(notConfigured && { not_configured: true, hinweis: notConfiguredHinweis }),
                   routing_hinweis:
                     "small → RAGSource_get direkt | medium/large → RAGSource_toc (toc_available=true: TOC; toc_available=false: alle §§ als Fallback)",
                   sources: catalog,
