@@ -37,7 +37,6 @@ jobs:
         working-directory: ragsource-server
 
       - name: DB seeden (remote D1)
-        continue-on-error: true
         run: |
           npx tsx scripts/build-db-v2.ts --remote \
             --content-root=$GITHUB_WORKSPACE/ragsource-content/regelungsrahmen
@@ -55,5 +54,13 @@ jobs:
 
       - name: Health-Check
         run: |
-          sleep 5
-          curl -f https://ragsource-api-v2.ragsource.workers.dev/api/health
+          for i in {1..12}; do
+            echo "Health-Check Versuch $i/12..."
+            if curl -sf https://ragsource-api-v2.ragsource.workers.dev/api/health; then
+              echo "Health-Check erfolgreich."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Health-Check nach 60s fehlgeschlagen."
+          exit 1
