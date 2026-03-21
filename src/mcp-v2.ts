@@ -187,7 +187,10 @@ function buildInstructionsAmtsschimmel(geo: string | null): string {
     "amtsschimmel.ai — kommunale Wissensdatenbank (powered by RAGSource).\n" +
     `Workflow: RAGSource_catalog${geoHint} → RAGSource_toc für medium/large-Quellen` +
     " → RAGSource_get für Originalwortlaut und Einzelparagrafen aus ToC.\n" +
-    "RAGSource_query nur als Fallback."
+    "RAGSource_query nur als Fallback.\n" +
+    "Rechtsrang (Normenhierarchie): 0=EU-Recht > 1=Bundesrecht > 2=Landesrecht > 3=Kreisrecht > 4=Verbandsrecht > 5=Ortsrecht > 6=Tarifrecht. " +
+    "Höherrangige Quellen haben Vorrang. Bei Konflikten zwischen Quellen: Widerspruch benennen, höherrangige Norm zitieren, " +
+    "ggf. Anpassung der niederrangigen Quelle empfehlen."
   );
 }
 
@@ -319,9 +322,9 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         const geoFilter = buildGeoFilter(geo);
         const projektFilter = buildProjektFilter(resolveProjekt(projektInput));
 
-        // Quellen abfragen — nur die 7 Felder, die das LLM braucht
+        // Quellen abfragen — alle Felder, die das LLM braucht
         const sql = `
-          SELECT s.id, s.titel, s.typ, s.ebene, s.size_class, s.beschreibung,
+          SELECT s.id, s.titel, s.typ, s.ebene, s.rechtsrang, s.rechtsrang_label, s.size_class, s.beschreibung,
                  EXISTS(SELECT 1 FROM source_tocs t WHERE t.source_id = s.id) AS toc_available
           FROM sources s
           WHERE ${geoFilter.sql}
@@ -334,6 +337,8 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           titel: string;
           typ: string | null;
           ebene: string | null;
+          rechtsrang: number | null;
+          rechtsrang_label: string | null;
           size_class: string;
           beschreibung: string | null;
           toc_available: 0 | 1;
@@ -352,6 +357,8 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           titel: s.titel,
           typ: s.typ,
           ebene: s.ebene,
+          rechtsrang: s.rechtsrang,
+          rechtsrang_label: s.rechtsrang_label,
           size_class: s.size_class,
           toc_available: s.toc_available === 1,
           beschreibung: s.beschreibung,
@@ -409,6 +416,13 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           .describe(
             "TOC-Ebene fuer mehrteilige Werke, z.B. 'buch-2' fuer BGB Buch 2. " +
             "Ohne Angabe: 'gesamt'.",
+          ),
+        geo: z
+          .string()
+          .optional()
+          .describe(
+            "Geo-Kontext (ARS-Code oder Klarname) — wird als Metadaten weitergegeben, " +
+            "beeinflusst nicht die Abfrage (Source-IDs sind bereits geo-gefiltert).",
           ),
       },
       { title: "RAGSource toc", readOnlyHint: true, destructiveHint: false },
@@ -518,6 +532,13 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           .describe(
             "Liste von Quellen mit optionalen Paragraphen-Referenzen. " +
             "Max. 8 Quellen, max. 25 §§ je Quelle, max. 50 §§ gesamt pro Aufruf.",
+          ),
+        geo: z
+          .string()
+          .optional()
+          .describe(
+            "Geo-Kontext (ARS-Code oder Klarname) — wird als Metadaten weitergegeben, " +
+            "beeinflusst nicht die Abfrage (Source-IDs sind bereits geo-gefiltert).",
           ),
       },
       { title: "RAGSource get", readOnlyHint: true, destructiveHint: false },

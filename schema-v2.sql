@@ -22,7 +22,9 @@ CREATE TABLE IF NOT EXISTS sources (
   dateipfad TEXT,               -- Originalpfad (relativ zum Content-Root)
   url TEXT,                     -- Quell-URL (z.B. https://www.gesetze-im-internet.de/...)
   beschreibung TEXT,            -- Kurzbeschreibung für Catalog (1-2 Sätze)
-  stand TEXT                    -- Datum der letzten inhaltlichen Änderung (ISO-Datum)
+  stand TEXT,                   -- Datum der letzten inhaltlichen Änderung (ISO-Datum)
+  rechtsrang INTEGER,           -- 1=Bundesrecht, 2=Landesrecht, 3=Kreisrecht, 4=Verbandsrecht, 5=Ortsrecht, 6=Tarifrecht
+  rechtsrang_label TEXT         -- "Bundesrecht", "Landesrecht BW", "Kreisrecht", "Verbandsrecht", "Ortsrecht", "Tarifrecht"
 );
 
 CREATE INDEX IF NOT EXISTS idx_sources_ebene ON sources(ebene);
@@ -125,7 +127,9 @@ INSERT OR REPLACE INTO gemeinden (ars, slug, name, verband, verband_ars, kreis, 
   ('081175009017', 'duernau', 'Dürnau', 'GVV Raum Bad Boll', '081175009', 'Göppingen', '08117', 'Baden-Württemberg', '08', 'BW'),
   ('081175009023', 'gammelshausen', 'Gammelshausen', 'GVV Raum Bad Boll', '081175009', 'Göppingen', '08117', 'Baden-Württemberg', '08', 'BW'),
   ('081175009029', 'hattenhofen', 'Hattenhofen', 'GVV Raum Bad Boll', '081175009', 'Göppingen', '08117', 'Baden-Württemberg', '08', 'BW'),
-  ('081175009060', 'zell-ua', 'Zell u.A.', 'GVV Raum Bad Boll', '081175009', 'Göppingen', '08117', 'Baden-Württemberg', '08', 'BW');
+  ('081175009060', 'zell-ua', 'Zell u.A.', 'GVV Raum Bad Boll', '081175009', 'Göppingen', '08117', 'Baden-Württemberg', '08', 'BW'),
+  -- Konstanz (Stadtkreis — kein Verband)
+  ('083355004043', 'konstanz', 'Konstanz', NULL, NULL, 'Konstanz', '08335', 'Baden-Württemberg', '08', 'BW');
 
 -- -----------------------------------------------------------------------
 -- Seed: Geo-Aliases (aus v1 unverändert)
@@ -175,4 +179,12 @@ INSERT OR REPLACE INTO geo_aliases (alias, typ, ars) VALUES
   ('zell ua', 'gemeinde', '081175009060'),
   ('zell u.a.', 'gemeinde', '081175009060'),
   ('zell unter aichelberg', 'gemeinde', '081175009060'),
-  ('081175009060', 'gemeinde', '081175009060');
+  ('081175009060', 'gemeinde', '081175009060'),
+  -- Landkreis Konstanz
+  ('08335', 'landkreis', '08335'),
+  ('konstanz', 'landkreis', '08335'),
+  ('landkreis konstanz', 'landkreis', '08335'),
+  ('lkr konstanz', 'landkreis', '08335'),
+  -- Stadt Konstanz (Stadtkreis = Gemeinde-Ebene)
+  ('083355004043', 'gemeinde', '083355004043'),
+  ('stadt konstanz', 'gemeinde', '083355004043');

@@ -135,6 +135,30 @@ function execWithRetry(cmd: string, opts: Parameters<typeof execSync>[1], retrie
   }
 }
 
+/** Leitet Rechtsrang + Label aus dem ebene-Feld ab.
+ *
+ * Gespeicherte Kurzform-Werte: "eu" | "bund" | "land" | "kreis" | "verband" | "gemeinde"
+ * Alte Langform (Fallback):    "bundesrecht" | "landesrecht-bw" | "kreisrecht" | "ortsrecht-*" | "tarifrecht"
+ */
+function getRechtsrang(ebene: string | null): { rechtsrang: number | null; rechtsrang_label: string | null } {
+  if (!ebene) return { rechtsrang: null, rechtsrang_label: null };
+  // Kurzform (aktuell im Content)
+  if (ebene === "eu")             return { rechtsrang: 0, rechtsrang_label: "EU-Recht" };
+  if (ebene === "bund")           return { rechtsrang: 1, rechtsrang_label: "Bundesrecht" };
+  if (ebene === "land")           return { rechtsrang: 2, rechtsrang_label: "Landesrecht BW" };
+  if (ebene === "kreis")          return { rechtsrang: 3, rechtsrang_label: "Kreisrecht" };
+  if (ebene === "verband")        return { rechtsrang: 4, rechtsrang_label: "Verbandsrecht" };
+  if (ebene === "gemeinde")       return { rechtsrang: 5, rechtsrang_label: "Ortsrecht" };
+  if (ebene === "tarifrecht")     return { rechtsrang: 6, rechtsrang_label: "Tarifrecht" };
+  // Langform-Fallback (ältere Dateien)
+  if (ebene === "bundesrecht")    return { rechtsrang: 1, rechtsrang_label: "Bundesrecht" };
+  if (ebene === "landesrecht-bw") return { rechtsrang: 2, rechtsrang_label: "Landesrecht BW" };
+  if (ebene === "kreisrecht")     return { rechtsrang: 3, rechtsrang_label: "Kreisrecht" };
+  if (ebene === "gvv")            return { rechtsrang: 4, rechtsrang_label: "Verbandsrecht" };
+  if (ebene.startsWith("ortsrecht")) return { rechtsrang: 5, rechtsrang_label: "Ortsrecht" };
+  return { rechtsrang: null, rechtsrang_label: null };
+}
+
 /** Bestimmt size_class anhand des Token-Counts */
 function getSizeClass(tokens: number): string {
   if (tokens < TOKEN_SMALL) return "small";
@@ -482,6 +506,7 @@ for (const { file, root } of mdFilesWithRoot) {
 
   // Ebene normalisieren
   const ebene: string | null = fm.ebene === "gvv" ? "verband" : (fm.ebene || null);
+  const { rechtsrang, rechtsrang_label } = getRechtsrang(ebene);
 
   // Dateipfad relativ zum Content-Root
   const dateipfad = relative(root, file).replace(/\\/g, "/");
@@ -500,12 +525,13 @@ for (const { file, root } of mdFilesWithRoot) {
 
   // 1. sources-Eintrag
   group.push(
-    `INSERT INTO sources (id, titel, kurzbezeichnung, typ, ebene, land_ars, kreis_ars, verband_ars, gemeinde_ars, section_count, total_tokens, size_class, gueltig_ab, quelle, dateipfad, url, beschreibung, stand) VALUES (` +
+    `INSERT INTO sources (id, titel, kurzbezeichnung, typ, ebene, land_ars, kreis_ars, verband_ars, gemeinde_ars, section_count, total_tokens, size_class, gueltig_ab, quelle, dateipfad, url, beschreibung, stand, rechtsrang, rechtsrang_label) VALUES (` +
     `${esc(sourceId)}, ${esc(fm.titel)}, ${esc(fm.kurzbezeichnung || null)}, ${esc(fm.typ || null)}, ${esc(ebene)}, ` +
     `${esc(land_ars)}, ${esc(kreis_ars)}, ${esc(verband_ars)}, ${esc(gemeinde_ars)}, ` +
     `${sections.length}, ${totalTokens}, ${esc(sizeClass)}, ` +
     `${esc(fm.gueltig_ab || null)}, ${esc(fm.quelle || null)}, ${esc(dateipfad)}, ` +
-    `${esc(fm.url || null)}, ${esc(fm.beschreibung || null)}, ${esc(fm.stand || null)});`,
+    `${esc(fm.url || null)}, ${esc(fm.beschreibung || null)}, ${esc(fm.stand || null)}, ` +
+    `${rechtsrang ?? "NULL"}, ${esc(rechtsrang_label)});`,
   );
 
   // 2. source_projekte

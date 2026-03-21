@@ -34,6 +34,8 @@ export interface Source {
   url: string | null;
   beschreibung: string | null;
   stand: string | null;
+  rechtsrang: number | null;       // 1=Bundesrecht … 6=Tarifrecht
+  rechtsrang_label: string | null; // "Bundesrecht", "Landesrecht BW", …
 }
 
 /** Ein Paragraph / Artikel / Erwägungsgrund */
@@ -65,6 +67,8 @@ export interface CatalogEntry {
   titel: string;
   typ: string | null;
   ebene: string | null;
+  rechtsrang: number | null;        // 1=Bundesrecht … 6=Tarifrecht
+  rechtsrang_label: string | null;  // "Bundesrecht", "Landesrecht BW", …
   size_class: string;
   toc_available: boolean;       // true wenn TOC in source_tocs vorhanden
   beschreibung: string | null;  // Kurzbeschreibung der Quelle

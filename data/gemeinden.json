@@ -13,6 +13,12 @@
       "name": "Göppingen",
       "land_ars": "08",
       "aliases": ["goeppingen", "göppingen", "gp", "landkreis göppingen", "landkreis goeppingen", "lkr göppingen", "lkr goeppingen"]
+    },
+    {
+      "ars": "08335",
+      "name": "Konstanz",
+      "land_ars": "08",
+      "aliases": ["konstanz", "landkreis konstanz", "lkr konstanz"]
     }
   ],
   "verbaende": [
@@ -65,6 +71,13 @@
       "verband_ars": "081175009",
       "slug": "zell-ua",
       "aliases": ["zell-ua", "zell ua", "zell u.a.", "zell unter aichelberg"]
+    },
+    {
+      "ars": "083355004043",
+      "name": "Konstanz",
+      "kreis_ars": "08335",
+      "slug": "konstanz",
+      "aliases": ["konstanz", "stadt konstanz"]
     }
   ]
 }
