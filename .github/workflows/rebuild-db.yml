@@ -1,11 +1,12 @@
-name: DB neu bauen (Content geändert)
+name: DB neu bauen (Content geaendert)
 
-# Läuft nur wenn ein Content-Repo ein "content-updated" Event schickt.
+# Laeuft wenn ragsource-content ein "content-updated-v2" Event schickt.
 # Baut nur die Datenbank neu -- der laufende Worker wird NICHT angefasst.
+# D1 ist persistent: neue Paragraphen sind sofort ueber den bestehenden Worker abrufbar.
 
 on:
   repository_dispatch:
-    types: [content-updated]
+    types: [content-updated-v2]
 
 jobs:
   rebuild:
@@ -13,25 +14,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout ragsource-server
+      - name: Checkout ragsource-server (main)
         uses: actions/checkout@v4
         with:
           path: ragsource-server
 
-      - name: Checkout ragsource-content (Regelungsrahmen, Säule 1)
+      - name: Checkout ragsource-content (Regelungsrahmen, Saeule 1)
         uses: actions/checkout@v4
         with:
           repository: ragsource-ai/ragsource-content
           token: ${{ secrets.CONTENT_PAT }}
           path: ragsource-content
-
-      # Zukünftig: weitere Content-Repos hier ergänzen
-      # - name: Checkout amtsschimmel-ai/wiki (Säule 2)
-      #   uses: actions/checkout@v4
-      #   with:
-      #     repository: amtsschimmel-ai/wiki
-      #     token: ${{ secrets.CROSS_ORG_PAT }}
-      #     path: amtsschimmel-wiki
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -44,9 +37,9 @@ jobs:
         run: npm ci
         working-directory: ragsource-server
 
-      - name: DB neu bauen (remote D1)
+      - name: DB seeden (remote D1)
         run: |
-          npx tsx scripts/build-db.ts --remote \
+          npx tsx scripts/build-db-v2.ts --remote \
             --content-root=$GITHUB_WORKSPACE/ragsource-content/regelungsrahmen
         working-directory: ragsource-server
         env:
@@ -54,4 +47,3 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       # Kein wrangler deploy -- der laufende Worker bleibt unangetastet.
-      # D1 ist persistent: neue Artikel sind sofort über den bestehenden Worker abrufbar.

@@ -1,24 +1,24 @@
-name: Deploy Worker v2 (v2-agentic geändert)
+name: Deploy Worker (main geaendert)
 
-# Läuft nur bei Änderungen am v2-agentic Branch.
-# Seeded die DB v2 neu UND deployt den v2 Worker.
+# Laeuft nur bei Aenderungen am main Branch.
+# Seeded die DB neu UND deployt den Worker.
 
 on:
   push:
-    branches: [v2-agentic]
+    branches: [main]
 
 jobs:
   deploy:
-    name: DB v2 seeden + v2 Worker deployen
+    name: DB seeden + Worker deployen
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout ragsource-server (v2-agentic)
+      - name: Checkout ragsource-server (main)
         uses: actions/checkout@v4
         with:
           path: ragsource-server
 
-      - name: Checkout ragsource-content (Regelungsrahmen, Säule 1)
+      - name: Checkout ragsource-content (Regelungsrahmen, Saeule 1)
         uses: actions/checkout@v4
         with:
           repository: ragsource-ai/ragsource-content
@@ -36,7 +36,7 @@ jobs:
         run: npm ci
         working-directory: ragsource-server
 
-      - name: DB v2 seeden (remote D1)
+      - name: DB seeden (remote D1)
         continue-on-error: true
         run: |
           npx tsx scripts/build-db-v2.ts --remote \
@@ -46,8 +46,8 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      - name: v2 Worker deployen
-        run: npx wrangler deploy --config=wrangler-v2.jsonc
+      - name: Worker deployen
+        run: npx wrangler deploy
         working-directory: ragsource-server
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

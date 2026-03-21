@@ -1,104 +1,103 @@
-// RAGSource Server Types
+// RAGSource Server Types v2 — Agentic RAG
+
+// -----------------------------------------------------------------------
+// Cloudflare Workers Bindings
+// -----------------------------------------------------------------------
 
 export interface Env {
   DB: D1Database;
   MCP_OBJECT: DurableObjectNamespace;
+  CONFIG: KVNamespace;
 }
 
-// --- Datenbank-Entities ---
+// -----------------------------------------------------------------------
+// Datenbank-Entities
+// -----------------------------------------------------------------------
 
-export interface Article {
-  id: number;
+/** Eine Rechtsquelle (Gesetz, Satzung, Verordnung) */
+export interface Source {
+  id: string;                   // "FwG_BW", "Feuerwehrsatzung_BadBoll"
   titel: string;
+  kurzbezeichnung: string | null; // "FwG BW", "GemO BW"
+  typ: string | null;           // "gesetz" | "satzung" | "verordnung" | "eu-recht"
+  ebene: string | null;         // "bundesrecht" | "landesrecht-bw" | "ortsrecht-bad-boll"
   land_ars: string | null;
   kreis_ars: string | null;
   verband_ars: string | null;
   gemeinde_ars: string | null;
-  ebene: Ebene;
-  saule: Saule;
-  content: string;
+  section_count: number;        // Anzahl Paragraphen
+  total_tokens: number;         // Gesamt-Token-Schätzung
+  size_class: string;           // "small" | "medium" | "large"
   gueltig_ab: string | null;
-  status: string;
-  dateipfad: string;
   quelle: string | null;
-  token_count: number | null;
+  dateipfad: string | null;
+  url: string | null;
+  beschreibung: string | null;
+  stand: string | null;
+  rechtsrang: number | null;       // 1=Bundesrecht … 6=Tarifrecht
+  rechtsrang_label: string | null; // "Bundesrecht", "Landesrecht BW", …
 }
 
-export type Ebene = "gemeinde" | "verband" | "kreis" | "land" | "bund";
-export type Saule = "regelungsrahmen" | "wiki" | "lokal";
-export type Persona = "buerger" | "gemeinderat" | "verwaltung" | "buergermeister";
-
-export interface Gemeinde {
-  ars: string;            // PK, 12-stellig
-  slug: string;
-  name: string;
-  verband: string | null;
-  verband_ars: string | null;
-  kreis: string;
-  kreis_ars: string;
-  land: string;
-  land_ars: string;
-  land_kurz: string;
+/** Ein Paragraph / Artikel / Erwägungsgrund */
+export interface SourceSection {
+  id: string;                   // "FwG_BW_§2", "DSGVO_Artikel6"
+  source_id: string;
+  section_ref: string;          // "§ 2", "Artikel 6", "Erwägungsgrund 40"
+  heading: string | null;       // Titel ohne section_ref
+  body: string;                 // Originalwortlaut
+  section_type: string;         // "paragraph" | "artikel" | "erwaegungsgrund" | "kapitel"
+  sort_order: number;
 }
 
-export interface GeoAlias {
-  alias: string;
-  typ: 'bundesland' | 'landkreis' | 'gemeinde' | 'verband';
-  ars: string;
+/** Inhaltsverzeichnis einer Rechtsquelle */
+export interface SourceToc {
+  id: string;
+  source_id: string;
+  toc_level: string;            // "gesamt" | "buch-1" etc.
+  content: string;              // TOC als Markdown mit Stichworten in Klammern
 }
 
-// --- Retrieval ---
+// -----------------------------------------------------------------------
+// Rückgabe-Typen der MCP-Tools
+// -----------------------------------------------------------------------
 
-export interface ScoredArticle extends Article {
-  score: number;
-}
-
-export interface QueryParams {
-  query: string;
-  gemeinde_ars?: string;
-  kreis_ars?: string;
-  verband_ars?: string;
-  land_ars?: string;
-  geo_level?: "gemeinde" | "verband" | "kreis" | "land";
-  projekt?: string;
-  persona: Persona;
-  hints?: string[];
-  sources?: string[];
-}
-
-// --- Response-Paket (an LLM) ---
-
-export interface ResponsePacket {
-  articles: ArticleResult[];
-  persona: PersonaConfig;
-  geo: GeoInfo;
-  disclaimer: string;
-}
-
-export interface ArticleResult {
+/** Catalog-Eintrag (für RAGSource_catalog) */
+export interface CatalogEntry {
+  id: string;
   titel: string;
-  ebene: Ebene;
-  saule: Saule;
-  score: number;
-  content: string;
-  dateipfad: string;
-  quelle: string | null;
+  typ: string | null;
+  ebene: string | null;
+  rechtsrang: number | null;        // 1=Bundesrecht … 6=Tarifrecht
+  rechtsrang_label: string | null;  // "Bundesrecht", "Landesrecht BW", …
+  size_class: string;
+  toc_available: boolean;       // true wenn TOC in source_tocs vorhanden
+  beschreibung: string | null;  // Kurzbeschreibung der Quelle
 }
 
-export interface PersonaConfig {
-  rolle: Persona;
-  sprache: "einfach" | "fachsprache";
-  max_satzlaenge: number;
-  fachsprache: boolean;
-  format: "service" | "briefing" | "fachlich" | "erklaerend";
-  kontaktdaten_anzeigen: boolean;
+/** TOC-Ergebnis (für RAGSource_toc) */
+export interface TocResult {
+  source_id: string;
+  titel: string;
+  size_class: string;
+  section_count: number;
+  toc: string | null;           // null wenn noch kein TOC im Content
+  sections?: SectionResult[];   // Fallback: alle §§ wenn toc=null (nur small/medium)
 }
 
-export interface GeoInfo {
-  level: "gemeinde" | "verband" | "kreis" | "land" | "alle";
-  name: string;
-  verband: string | null;
-  kreis: string | null;
-  land: string | null;
+/** §-Ergebnis (für RAGSource_get) */
+export interface SectionResult {
+  ref: string;                  // "§ 2"
+  heading: string | null;       // Abschnittstitel
+  body: string;                 // Originalwortlaut
 }
 
+/** Query-Treffer (für RAGSource_query) */
+export interface QueryHit {
+  source_id: string;
+  titel: string;
+  ebene: string | null;
+  size_class: string;
+  section_ref: string;
+  heading: string | null;
+  body: string;
+}

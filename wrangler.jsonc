@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "ragsource-api",
+  "name": "ragsource-api-v2",
   "main": "src/index.ts",
   "compatibility_date": "2025-04-01",
   "compatibility_flags": ["nodejs_compat"],
@@ -8,15 +8,22 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "ragsource-db",
-      "database_id": "e6150434-d6c0-44a2-a36f-5d0b9d77bcf7"
+      "database_name": "ragsource-db-v2",
+      "database_id": "55d4deda-60c5-4b70-a6d1-2b76f43e5715"
+    }
+  ],
+
+  "kv_namespaces": [
+    {
+      "binding": "CONFIG",
+      "id": "e0af38b6cee446adb258055e172c8a26"
     }
   ],
 
   "durable_objects": {
     "bindings": [
       {
-        "class_name": "RAGSourceMCP",
+        "class_name": "RAGSourceMCPv2",
         "name": "MCP_OBJECT"
       }
     ]
@@ -24,7 +31,7 @@
 
   "migrations": [
     {
-      "new_sqlite_classes": ["RAGSourceMCP"],
+      "new_sqlite_classes": ["RAGSourceMCPv2"],
       "tag": "v1"
     }
   ],

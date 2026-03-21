@@ -1,28 +1,27 @@
 # RAGSource Server
 
-Cloudflare Worker mit D1-Datenbank (SQLite + FTS5), der kommunales Verwaltungswissen als durchsuchbare Wissensbasis bereitstellt -- erreichbar ueber REST und MCP (Model Context Protocol).
+Cloudflare Worker mit D1-Datenbank (SQLite + FTS5), der kommunales Verwaltungswissen als agentic RAG-System bereitstellt -- erreichbar ueber MCP (Model Context Protocol).
 
-**Live:** `https://ragsource-api.ragsource.workers.dev`
-**MCP-Endpunkt:** `https://ragsource-api.ragsource.workers.dev/mcp`
-**MCP-Version:** 1.3.0
-**Status:** Phase 1e live (Unified `geo`-Parameter, ARS-basierte Geo-Filterung)
+**Live:** `https://ragsource-api-v2.ragsource.workers.dev`
+**MCP-Endpunkt:** `https://ragsource-api-v2.ragsource.workers.dev/mcp`
+**amtsschimmel.ai:** `https://mcp.amtsschimmel.ai/mcp?geo=<ARS>&rolle=<rolle>`
+**Status:** v2 Agentic RAG (243 Quellen, §-granular)
 
 ---
 
 ## Ueberblick
 
-RAGSource macht kommunales Verwaltungswissen fuer KI-Systeme zugaenglich. Der Server empfaengt Anfragen von LLMs (Claude, ChatGPT, etc.), durchsucht die Wissensbasis mit einem mehrstufigen Retrieval-System (FTS5 + BM25) und liefert compliance-gepruefte, hierarchisch geordnete Artikel zurueck.
+RAGSource macht kommunales Verwaltungswissen fuer KI-Systeme zugaenglich. Der Server empfaengt Anfragen von LLMs (Claude, ChatGPT, etc.) und liefert compliance-geprueftes, hierarchisch geordnetes Rechtswissen auf Paragraphen-Ebene zurueck.
 
 ```
 LLM (Claude, ChatGPT, ...)
     │
-    ├── MCP-Protokoll → POST /mcp
-    └── REST-API      → POST /api/query
+    └── MCP-Protokoll → POST /mcp
                               │
-                     Cloudflare Worker
+                     Cloudflare Worker (Durable Objects)
                          │
                     D1 (SQLite + FTS5)
-                    Wissensartikel als Markdown
+                    243 Rechtsquellen, §-granular
 ```
 
 ---
@@ -32,21 +31,16 @@ LLM (Claude, ChatGPT, ...)
 ```
 ragsource-server/
 ├── src/
-│   ├── index.ts              # Entry point: /mcp → McpAgent, rest → Hono
-│   ├── mcp.ts                # MCP-Server (RAGSourceMCP Durable Object)
-│   ├── api.ts                # REST-Endpunkte (Hono)
+│   ├── index.ts              # Entry point: /mcp → McpAgent, /api → Hono
+│   ├── mcp.ts                # MCP-Server (RAGSourceMCPv2 Durable Object)
 │   ├── types.ts              # TypeScript-Typen
 │   └── engine/
-│       ├── matcher.ts        # 5-Stufen FTS5-Retrieval + Geo/Projekt-Filter
 │       ├── normalize.ts      # Geo-Aufloesung: geo-Parameter → ARS + Ebene + Klarnamen
-│       ├── hierarchy.ts      # Normenhierarchie-Sortierung
-│       ├── response.ts       # Response-Paket bauen
-│       └── config.ts         # Retrieval-Konfiguration (einheitliche Filter, Persona nur Output)
+│       └── hierarchy.ts      # Normenhierarchie-Sortierung
 ├── scripts/
-│   └── build-db.ts           # Markdown → D1 Build-Pipeline
+│   └── build-db-v2.ts        # Markdown → D1 Build-Pipeline
 ├── data/
 │   └── gemeinden.json        # Single Source of Truth: ARS, Klarnamen, Aliases
-├── test-articles/            # 5 Testartikel fuer lokale Entwicklung
 ├── schema.sql                # Datenbank-Schema (FTS5 + Tabellen + Indizes)
 └── wrangler.jsonc            # Cloudflare-Konfiguration
 ```
@@ -66,97 +60,69 @@ ragsource-server/
 
 ---
 
-## API-Endpunkte
-
-### MCP (fuer Claude Desktop, Claude.ai, Cursor)
+## MCP-Tools (Agentic RAG)
 
 | Tool | Funktion |
 |------|----------|
-| `ragsource_query` | Hauptsuche mit persona-gerechtem Response-Paket |
-| `ragsource_search` | Einfache Stichwortsuche |
-| `ragsource_article` | Einzelartikel per Dateipfad laden |
+| `RAGSource_catalog` | Pflichtaufruf: alle verfuegbaren Rechtsquellen fuer eine Gemeinde/Region |
+| `RAGSource_toc` | Inhaltsverzeichnis(se) einer oder mehrerer Quellen (Batch, max. 8) |
+| `RAGSource_get` | Originalwortlaut spezifischer Paragraphen (max. 50 §§ pro Aufruf) |
+| `RAGSource_query` | FTS5-Volltextsuche (Fallback) |
 
-### REST
-
-| Methode | Pfad | Funktion |
-|---------|------|----------|
-| POST | `/api/query` | Hauptsuche |
-| GET | `/api/search` | Stichwortsuche |
-| GET | `/api/article` | Einzelartikel |
-| GET | `/api/health` | Server-Status |
-| GET | `/api/openapi` | OpenAPI-Spezifikation |
-
-### Beispiel-Anfrage
-
-```bash
-curl -X POST https://ragsource-api.ragsource.workers.dev/api/query \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "Wie wird der Feuerwehrkommandant gewaehlt?",
-    "geo": "081175009012",
-    "persona": "buerger",
-    "hints": ["Feuerwehr", "Kommandant", "Wahl"]
-  }'
-```
-
-Der `geo`-Parameter akzeptiert ARS-Codes (Laenge bestimmt Ebene: 2=Land, 5=Kreis, 9=Verband, 12=Gemeinde) oder Klarnamen/Slugs (z.B. `Bad Boll`, `bad-boll`), die via `geo_aliases` aufgeloest werden.
-
----
-
-## Retrieval: 5-Stufen-System
+### Agentic Workflow
 
 ```
-Stufe 1: FTS5 ueber Titel + Content          (BM25-Ranking)          — 0.35
-Stufe 2: FTS5 ueber kuratierte Fragen        (natuerliche Sprache)   — 0.20
-Stufe 3: FTS5 ueber Keywords                 (Frontmatter-Keywords)  — 0.20
-Stufe 4: FTS5 ueber LLM-Hints               (Synonyme, Fachbegriffe) — 0.15
-Stufe 5: Titel-Match ueber LLM-Sources       (vermutete Dokumenttitel) — 0.10
-         └── Scores kombinieren → Top-Artikel → Hierarchie pruefen → ans LLM
+RAGSource_catalog (geo=...) → liefert Quellen mit size_class
+    ├── small  → RAGSource_get direkt (kein TOC noetig)
+    └── medium/large → RAGSource_toc → RAGSource_get (gezielte Paragraphen)
 ```
+
+### Rechtsrang (Normenhierarchie)
+
+| Wert | Ebene |
+|------|-------|
+| 0 | EU-Recht |
+| 1 | Bundesrecht |
+| 2 | Landesrecht BW |
+| 3 | Kreisrecht |
+| 4 | Verbandsrecht |
+| 5 | Ortsrecht |
+| 6 | Tarifrecht |
 
 ---
 
 ## Filter-Parameter
 
-Alle Filter sind optional. Ohne Filter werden alle publizierten Artikel durchsucht.
-
 | Parameter | Typ | Beschreibung |
 |-----------|-----|--------------|
-| `geo` | string | ARS-Code oder Klarname/Slug. ARS-Laenge bestimmt Ebene: `08` (Land), `08117` (Kreis), `081175009` (Verband), `081175009012` (Gemeinde). Klarnamen (z.B. `Bad Boll`, `bw`) werden via `geo_aliases` aufgeloest. Uebergeordnete Ebenen werden automatisch abgeleitet. **"Nur aufwaerts":** Verbands-Anfragen zeigen nur Verband/Kreis/Land/Bund, keine Gemeinde-Artikel |
-| `projekt` | string | Projekt-Slug fuer Projekt-Filter |
-| `persona` | enum | `buerger` \| `gemeinderat` \| `verwaltung` \| `buergermeister` |
+| `geo` | string | ARS-Code oder Klarname/Slug. ARS-Laenge bestimmt Ebene: `08` (Land), `08117` (Kreis), `081175009` (Verband), `081175009012` (Gemeinde). **"Nur aufwaerts":** Verbands-Anfragen zeigen nur Verband/Kreis/Land/Bund, keine Gemeinde-Quellen |
+| `projekt` | string | Projekt-Slug fuer Mandanten-Filter (z.B. `amtsschimmel`) |
 
 ---
 
-## Wissensartikel-Format
+## Content-Format (Rechtsquellen)
 
-Artikel sind Markdown-Dateien mit YAML-Frontmatter. Sie leben in einem separaten Content-Repo (`ragsource-ai/ragsource-content`).
+Quellen sind Markdown-Dateien mit YAML-Frontmatter. Sie leben in `ragsource-ai/ragsource-content`.
 
 ```yaml
 ---
 titel: Feuerwehrsatzung der Gemeinde Bad Boll
-ebene: gemeinde          # bund | land | kreis | verband | gemeinde
-saule: regelungsrahmen
-# ARS-Felder (maschinell, fuer Geo-Filterung)
+ebene: gemeinde
+typ: satzung
 land_ars: "08"
 kreis_ars: "08117"
 verband_ars: "081175009"
 gemeinde_ars: "081175009012"
-# Klartext-Felder (Lesehilfe)
-land: Baden-Wuerttemberg
-kreis: Goeppingen
-verband: GVV Raum Bad Boll
-gemeinde: Bad Boll
-projekte:
-  - amtsschimmel
-keywords:
-  - Feuerwehr
-  - Feuerwehrkommandant
-fragen:
-  - "Wie wird der Feuerwehrkommandant gewaehlt?"
+beschreibung: Regelungen zur Gemeindefeuerwehr (Aufgaben, Stärke, Kommandant)
 ---
-Artikelinhalt...
+## Inhaltsverzeichnis
+§ 1 Aufgaben...
+
+### § 1 Aufgaben
+...
 ```
+
+Heading-Konvention: `##` fuer Strukturelemente, `###` fuer abrufbare §§/Artikel.
 
 ---
 
@@ -195,12 +161,17 @@ npm run deploy
 
 ## GitHub Actions (automatisches Deploy)
 
-Bei Push auf `main` in diesem Repo oder per `repository_dispatch` vom Content-Repo:
+Bei Push auf `main` in diesem Repo:
 
 1. Checkout Server-Code + Content-Repo
-2. `build-db.ts` baut die D1-Datenbank neu
+2. `build-db-v2.ts` baut die D1-Datenbank neu
 3. `wrangler deploy` deployt den Worker
 4. Health-Check gegen `/api/health`
+
+Bei `repository_dispatch` vom Content-Repo (Event: `content-updated-v2`):
+
+1. Checkout Server-Code + Content-Repo
+2. `build-db-v2.ts` baut nur die DB neu (Worker bleibt unveraendert)
 
 Benoetigt zwei Secrets im Repo:
 - `CLOUDFLARE_API_TOKEN` -- Cloudflare API Token mit Worker + D1 Rechten
@@ -208,7 +179,7 @@ Benoetigt zwei Secrets im Repo:
 
 ---
 
-## MCP-Integration in Claude
+## MCP-Integration
 
 ### Claude Desktop / Claude Code
 
@@ -216,7 +187,7 @@ Benoetigt zwei Secrets im Repo:
 {
   "mcpServers": {
     "ragsource": {
-      "url": "https://ragsource-api.ragsource.workers.dev/mcp"
+      "url": "https://ragsource-api-v2.ragsource.workers.dev/mcp"
     }
   }
 }

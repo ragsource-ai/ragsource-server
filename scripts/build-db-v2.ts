@@ -11,6 +11,8 @@
  *   npx tsx scripts/build-db-v2.ts --local    # Lokale D1
  *   npx tsx scripts/build-db-v2.ts --remote   # Remote D1
  *   npx tsx scripts/build-db-v2.ts --local --content-root=/pfad/zum/content
+ *
+ * (Dateiname build-db-v2.ts bleibt fuer Rueckwaertskompatibilitaet mit CI/CD bestehen)
  */
 
 import {
@@ -30,8 +32,8 @@ import { execSync } from "child_process";
 // -----------------------------------------------------------------------
 
 const DB_NAME = "ragsource-db-v2";
-const SCHEMA_FILE = "schema-v2.sql";
-const WRANGLER_CONFIG = "wrangler-v2.jsonc"; // Separate Konfiguration für v2
+const SCHEMA_FILE = "schema.sql";
+const WRANGLER_CONFIG = "wrangler.jsonc";
 const BATCH_SIZE = 80; // Statements pro Batch (etwas kleiner für v2, da mehr Statements pro Datei)
 
 // Token-Schwellen für size_class
