@@ -436,6 +436,13 @@ try {
 }
 if (existsSync(schemaOutFile)) unlinkSync(schemaOutFile);
 
+// Remote D1 benötigt auch nach CREATE etwas Zeit für DO-Replikation,
+// bevor die ersten INSERTs ankommen. Ohne Pause → UNIQUE constraint (alte Daten sichtbar).
+if (isRemote) {
+  console.log("  ⏳ Warte 10s auf D1 DO-Replikation nach CREATE...");
+  execSync("sleep 10");
+}
+
 // -----------------------------------------------------------------------
 // Dateien verarbeiten und SQL-Statements erzeugen
 // -----------------------------------------------------------------------
