@@ -81,6 +81,25 @@ CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(
   tokenize='unicode61'
 );
 
+-- FTS5-Trigger: halten sections_fts bei Inserts/Updates/Deletes automatisch aktuell.
+-- Nötig für inkrementelle Updates außerhalb des vollen DB-Rebuilds.
+-- Beim Full-Rebuild (build-db-v2.ts) überschreibt der abschließende 'rebuild'-Befehl
+-- die trigger-populierten Daten idempotent.
+CREATE TRIGGER IF NOT EXISTS sections_fts_ai AFTER INSERT ON source_sections BEGIN
+  INSERT INTO sections_fts(rowid, body, heading) VALUES (new.rowid, new.body, new.heading);
+END;
+
+CREATE TRIGGER IF NOT EXISTS sections_fts_ad AFTER DELETE ON source_sections BEGIN
+  INSERT INTO sections_fts(sections_fts, rowid, body, heading)
+    VALUES ('delete', old.rowid, old.body, old.heading);
+END;
+
+CREATE TRIGGER IF NOT EXISTS sections_fts_au AFTER UPDATE ON source_sections BEGIN
+  INSERT INTO sections_fts(sections_fts, rowid, body, heading)
+    VALUES ('delete', old.rowid, old.body, old.heading);
+  INSERT INTO sections_fts(rowid, body, heading) VALUES (new.rowid, new.body, new.heading);
+END;
+
 -- -----------------------------------------------------------------------
 -- Querverweise zwischen Rechtsquellen
 -- -----------------------------------------------------------------------

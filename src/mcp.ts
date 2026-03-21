@@ -591,6 +591,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           }
 
           let sections: SectionResult[] = [];
+          const sectionsNichtGefunden: string[] = [];
 
           if (!req.sections || req.sections.length === 0) {
             // Alle Paragraphen laden (gesamtes Dokument)
@@ -642,8 +643,9 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
                   body: row.body,
                 });
                 totalSectionsLoaded++;
+              } else {
+                sectionsNichtGefunden.push(rawRef);
               }
-              // Nicht gefundene §§ werden stillschweigend übersprungen
             }
           }
 
@@ -655,6 +657,9 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             quelle_url: source.url,
             sections_geladen: sections.length,
             sections,
+            ...(sectionsNichtGefunden.length > 0 && {
+              sections_nicht_gefunden: sectionsNichtGefunden,
+            }),
           });
         }
 
