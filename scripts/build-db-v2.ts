@@ -34,7 +34,12 @@ import { execSync } from "child_process";
 const DB_NAME = "ragsource-db-v2";
 const SCHEMA_FILE = "schema.sql";
 const WRANGLER_CONFIG = "wrangler.jsonc";
-const BATCH_SIZE = 80; // Statements pro Batch (etwas kleiner für v2, da mehr Statements pro Datei)
+const BATCH_SIZE = 80; // Statements pro Batch
+
+// D1 REST API (für --remote, ersetzt wrangler-CLI-Spawn pro Batch)
+const D1_DB_ID = "55d4deda-60c5-4b70-a6d1-2b76f43e5715"; // aus wrangler.jsonc
+const CF_API_BASE = "https://api.cloudflare.com/client/v4";
+const API_CONCURRENCY = 5; // max. parallele D1-API-Anfragen
 
 // Token-Schwellen für size_class
 const TOKEN_SMALL = 3_000;
@@ -137,6 +142,64 @@ function execWithRetry(cmd: string, opts: Parameters<typeof execSync>[1], retrie
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
     }
   }
+}
+
+/**
+ * Sendet einen Batch von SQL-Statements direkt an die D1 REST API (nur --remote).
+ * Eliminiert den wrangler-CLI-Spawn-Overhead (~2 s pro Batch).
+ * Gibt bis zu 3 Versuche bei Fehlern.
+ */
+async function fetchD1Batch(statements: string[]): Promise<void> {
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+  if (!accountId || !apiToken) {
+    throw new Error(
+      "Für --remote werden CLOUDFLARE_ACCOUNT_ID und CLOUDFLARE_API_TOKEN als Env-Variablen benötigt.",
+    );
+  }
+  // D1 Batch-API: Array von { sql, params } — statements ohne trailing ;
+  const body = statements.map((sql) => ({
+    sql: sql.trimEnd().replace(/;$/, ""),
+    params: [] as never[],
+  }));
+  const url = `${CF_API_BASE}/accounts/${accountId}/d1/database/${D1_DB_ID}/batch`;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = (await res.json()) as { success: boolean; errors: { message: string }[] };
+      if (!res.ok || !data.success) {
+        throw new Error(`D1 API HTTP ${res.status}: ${JSON.stringify(data.errors ?? data)}`);
+      }
+      return;
+    } catch (e) {
+      if (attempt === 3) throw e;
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+}
+
+/**
+ * Führt mehrere Statement-Batches mit max. `concurrency` parallelen API-Anfragen aus.
+ * Reihenfolge der Batches untereinander ist nicht garantiert — nur für unabhängige INSERTs nutzen.
+ */
+async function executeBatchesConcurrent(batches: string[][], concurrency: number): Promise<void> {
+  let completed = 0;
+  const total = batches.length;
+  for (let i = 0; i < batches.length; i += concurrency) {
+    const group = batches.slice(i, Math.min(i + concurrency, batches.length));
+    await Promise.all(
+      group.map(async (batch) => {
+        await fetchD1Batch(batch);
+        completed++;
+        process.stdout.write(`\r  ${completed}/${total} Batches ✅ `);
+      }),
+    );
+  }
+  process.stdout.write("\n");
 }
 
 /** Leitet Rechtsrang + Label aus dem ebene-Feld ab.
@@ -469,26 +532,35 @@ if (skipGemeinden) {
     }
 
     console.log(`\n🏘️  Gemeinden-Seed (${gemeindenStatements.length} Einträge, ${gemeindenBatches.length} Batches)...`);
-    const gemeindenFile = join(schemaDir, ".build-gemeinden-v2.sql");
-    let gBatchNum = 0;
-    for (const batch of gemeindenBatches) {
-      gBatchNum++;
-      process.stdout.write(`  Batch ${gBatchNum}/${gemeindenBatches.length}... `);
-      writeFileSync(gemeindenFile, batch.join("\n"), "utf-8");
+    if (isRemote) {
       try {
-        execWithRetry(
-          `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-gemeinden-v2.sql`,
-          { cwd: schemaDir, stdio: "pipe" },
-        );
-        process.stdout.write("✅\n");
+        await executeBatchesConcurrent(gemeindenBatches, API_CONCURRENCY);
       } catch (e) {
-        process.stdout.write("❌\n");
-        console.error(`❌ Fehler in Gemeinden-Batch ${gBatchNum}:`, e);
-        if (existsSync(gemeindenFile)) unlinkSync(gemeindenFile);
+        console.error("\n❌ Fehler beim Gemeinden-Seed:", e);
         process.exit(1);
       }
+    } else {
+      const gemeindenFile = join(schemaDir, ".build-gemeinden-v2.sql");
+      let gBatchNum = 0;
+      for (const batch of gemeindenBatches) {
+        gBatchNum++;
+        process.stdout.write(`  Batch ${gBatchNum}/${gemeindenBatches.length}... `);
+        writeFileSync(gemeindenFile, batch.join("\n"), "utf-8");
+        try {
+          execWithRetry(
+            `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-gemeinden-v2.sql`,
+            { cwd: schemaDir, stdio: "pipe" },
+          );
+          process.stdout.write("✅\n");
+        } catch (e) {
+          process.stdout.write("❌\n");
+          console.error(`❌ Fehler in Gemeinden-Batch ${gBatchNum}:`, e);
+          if (existsSync(gemeindenFile)) unlinkSync(gemeindenFile);
+          process.exit(1);
+        }
+      }
+      if (existsSync(gemeindenFile)) unlinkSync(gemeindenFile);
     }
-    if (existsSync(gemeindenFile)) unlinkSync(gemeindenFile);
     console.log("  Gemeinden-Seed ✅\n");
   } else {
     console.log("  ⚠️  data/seed-gemeinden-all.sql nicht gefunden — nur die 7 Einträge aus schema.sql.\n");
@@ -658,37 +730,46 @@ for (const group of articleGroups) {
   currentBatch.push(...group);
 }
 
-// Tail-Statements (FTS-Rebuild) anhängen
-if (currentBatch.length + tailStatements.length > BATCH_SIZE) {
-  batches.push(currentBatch);
-  batches.push(tailStatements);
-} else {
-  currentBatch.push(...tailStatements);
+// Letzten Batch pushen (tailStatements immer separat — FTS5-Rebuild muss nach allen INSERTs kommen)
+if (currentBatch.length > 0) {
   batches.push(currentBatch);
 }
 
-console.log(`\n🚀 Führe SQL aus (${mode}) in ${batches.length} Batches à max. ${BATCH_SIZE} Statements...`);
+console.log(`\n🚀 Führe SQL aus (${mode}) in ${batches.length} Content-Batches + FTS5-Rebuild...`);
 
-const sqlFile = join(schemaDir, ".build-seed-v2.sql");
-let batchNum = 0;
-
-for (const batch of batches) {
-  batchNum++;
-  process.stdout.write(`  Batch ${batchNum}/${batches.length}... `);
-  writeFileSync(sqlFile, batch.join("\n"), "utf-8");
+if (isRemote) {
+  // Remote: D1 REST API mit Parallelität (kein wrangler-CLI-Spawn pro Batch)
   try {
-    execWithRetry(
-      `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-seed-v2.sql`,
-      { cwd: schemaDir, stdio: "pipe" },
-    );
+    await executeBatchesConcurrent(batches, API_CONCURRENCY);
+    process.stdout.write("  FTS5-Rebuild... ");
+    await fetchD1Batch(tailStatements);
     process.stdout.write("✅\n");
   } catch (e) {
-    process.stdout.write("❌\n");
-    console.error(`❌ Fehler in Batch ${batchNum}:`, e);
-    if (existsSync(sqlFile)) unlinkSync(sqlFile);
+    console.error("\n❌ Fehler beim Content-Seed:", e);
     process.exit(1);
   }
+} else {
+  // Local: wrangler CLI (kein API-Token nötig)
+  const sqlFile = join(schemaDir, ".build-seed-v2.sql");
+  let batchNum = 0;
+  for (const batch of [...batches, tailStatements]) {
+    batchNum++;
+    process.stdout.write(`  Batch ${batchNum}/${batches.length + 1}... `);
+    writeFileSync(sqlFile, batch.join("\n"), "utf-8");
+    try {
+      execWithRetry(
+        `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-seed-v2.sql`,
+        { cwd: schemaDir, stdio: "pipe" },
+      );
+      process.stdout.write("✅\n");
+    } catch (e) {
+      process.stdout.write("❌\n");
+      console.error(`❌ Fehler in Batch ${batchNum}:`, e);
+      if (existsSync(sqlFile)) unlinkSync(sqlFile);
+      process.exit(1);
+    }
+  }
+  if (existsSync(sqlFile)) unlinkSync(sqlFile);
 }
 
-if (existsSync(sqlFile)) unlinkSync(sqlFile);
 console.log("\n✅ v2-Datenbank erfolgreich befüllt!");
