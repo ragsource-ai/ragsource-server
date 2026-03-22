@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
 """
-Generiert data/seed-gemeinden-all.sql aus der Destatis-Datei ars_2026-01-31.json.
+Generiert data/seed-gemeinden-all.sql aus den Destatis-Dateien.
 
 Quellen:
-  data/ars_2026-01-31.json  — Destatis Gemeindeverzeichnis (11.227 Gemeinden)
-  data/gemeinden.json       — Manuell gepflegte Einträge (Verband/Kreis-Namen)
+  data/GV100AD_28022026.txt — Destatis GV100AD (Kreise, Verbände, Gemeinden)
+  data/ars_2026-01-31.json  — Destatis Gemeindeverzeichnis (Fallback, 11.227 Gemeinden)
+  data/gemeinden.json       — Manuell gepflegte Einträge (Priorität)
+
+GV100AD-Format (Zeilenstruktur):
+  Index 0    : Satzart (1=Land, 4=Kreis, 5=Verband, 6=Gemeinde)
+  Index 1-9  : Qualitätsmerkmal
+  Index 10-21: ARS (12-stellig, space-padded je Satzart)
+               Satzart 4: Kreis-ARS an Index 10-14 (5 Ziffern)
+               Satzart 5: Kreis-ARS 10-14, Verband-ID 18-21 (4 Ziffern)
+               Satzart 6: volle 12-stellige ARS
+  Index 22-71: Name (50 Zeichen)
 
 Ausgabe:
   data/seed-gemeinden-all.sql  — INSERT OR REPLACE für alle Gemeinden
@@ -68,6 +78,33 @@ manual_map = {g["ars"]: g for g in manual["gemeinden"]}
 verbaende_map = {v["ars"]: v for v in manual["verbaende"]}
 kreise_map = {k["ars"]: k for k in manual["landkreise"]}
 
+# ── GV100AD einlesen: Kreise (Satzart 4) + Verbände (Satzart 5) ──────────────
+
+gv100_kreise: dict[str, str] = {}   # kreis_ars (5) → Kreisname
+gv100_verbaende: dict[str, str] = {}  # verband_ars (9) → Verbandsname
+
+GV100_FILE = BASE / "GV100AD_28022026.txt"
+if GV100_FILE.exists():
+    with open(GV100_FILE, encoding="utf-8") as f:
+        for line in f:
+            if len(line) < 72:
+                continue
+            satzart = line[0]
+            name_gv = line[22:72].strip()
+            if satzart == "4":
+                kreis_ars_gv = line[10:15]
+                if kreis_ars_gv.strip() and name_gv:
+                    gv100_kreise[kreis_ars_gv] = name_gv
+            elif satzart == "5":
+                kreis_ars_gv = line[10:15]
+                verband_id = line[18:22]
+                if kreis_ars_gv.strip() and verband_id.strip() and name_gv:
+                    verband_ars_gv = kreis_ars_gv + verband_id
+                    gv100_verbaende[verband_ars_gv] = name_gv
+    print(f"GV100AD: {len(gv100_kreise)} Kreise, {len(gv100_verbaende)} Verbände geladen")
+else:
+    print("GV100AD nicht gefunden — nur manuelle Kreis-/Verbands-Daten")
+
 # ── Verarbeitung ─────────────────────────────────────────────────────────────
 
 rows = []
@@ -92,21 +129,24 @@ for entry in destatis["daten"]:
 
     land, land_kurz = LAENDER.get(land_ars, ("", ""))
 
-    # Kreis-Name: manuelles Mapping bevorzugt
-    # Kreisfreie Städte (ars[5:] == '0000000'): Kreisname = Gemeindename (bereinigt)
-    is_kreisfrei = ars[5:] == "0000000"
+    # Kreis-Name: manuelles Mapping > GV100AD > Fallback kreisfreie Stadt
     if kreis_ars in kreise_map:
         kreis = kreise_map[kreis_ars]["name"]
-    elif is_kreisfrei:
-        # z.B. "Flensburg, Stadt" → "Flensburg"
-        kreis = name.split(",")[0].strip()
+    elif kreis_ars in gv100_kreise:
+        kreis = gv100_kreise[kreis_ars].split(",")[0].strip()
     else:
         kreis = ""
 
     # Verband: Stellen 6–9 des ARS; wenn alle "0" → kein Verband
     has_verband = verband_ars_raw[5:] != "0000"
     verband_ars = verband_ars_raw if has_verband else None
-    verband = verbaende_map.get(verband_ars_raw, {}).get("name") if has_verband else None
+    if has_verband:
+        verband = (
+            verbaende_map.get(verband_ars_raw, {}).get("name")
+            or gv100_verbaende.get(verband_ars_raw)
+        )
+    else:
+        verband = None
 
     # Manuell gepflegte Daten bevorzugen
     if ars in manual_map:
