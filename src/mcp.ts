@@ -268,7 +268,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
 
     // Kurze Instructions bauen: projekt-spezifischer Builder oder generischer Default.
     // geo wird als ARS-Code (Raw aus ?geo= URL-Param) direkt übergeben — kein resolveGeo nötig.
-    // sessionGeo dient zusätzlich als Default in Tool-Handlern (Closure).
+    // sessionGeo nur für Instructions-Text (init-Zeit); Tool-Handler lesen _currentGeo direkt.
     const sessionGeo = this._currentGeo || null;
     const builder = projekt ? INSTRUCTIONS_BUILDERS[projekt] : undefined;
     const instructions = builder ? builder(sessionGeo) : INSTRUCTIONS_DEFAULT;
@@ -319,8 +319,10 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           this.env.CONFIG.get("not_configured_message"),
         ]);
 
-        // Geo auflösen; URL-?geo= als Session-Default wenn kein expliziter Parameter
-        const effectiveGeo = geoInput ?? sessionGeo;
+        // Geo auflösen; URL-?geo= als Request-Default wenn kein expliziter Parameter.
+        // _currentGeo wird per fetch() pro Request gesetzt — robuster als sessionGeo-Closure,
+        // die beim DO-Reuse stale sein kann.
+        const effectiveGeo = geoInput ?? (this._currentGeo || null);
         const geo = effectiveGeo ? await resolveGeo(effectiveGeo, db) : null;
         const geoFilter = buildGeoFilter(geo);
         const projektFilter = buildProjektFilter(resolveProjekt(projektInput));
@@ -368,7 +370,11 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         }));
 
         const geoInfo = geo
-          ? { name: geo.display.name, level: geo.level }
+          ? {
+              name: geo.display.name,
+              level: geo.level,
+              ars: geo.gemeinde_ars ?? geo.verband_ars ?? geo.kreis_ars ?? geo.land_ars,
+            }
           : { name: "alle Ebenen", level: "alle" };
 
         // Nicht-konfiguriert-Fall: Gemeinde-Ebene angefragt, aber keine Gemeinde-Quellen vorhanden.
@@ -737,8 +743,10 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
       async ({ query, geo: geoInput, projekt: projektInput, hints }) => {
         const db = this.env.DB;
 
-        // Geo auflösen; URL-?geo= als Session-Default wenn kein expliziter Parameter
-        const effectiveGeo = geoInput ?? sessionGeo;
+        // Geo auflösen; URL-?geo= als Request-Default wenn kein expliziter Parameter.
+        // _currentGeo wird per fetch() pro Request gesetzt — robuster als sessionGeo-Closure,
+        // die beim DO-Reuse stale sein kann.
+        const effectiveGeo = geoInput ?? (this._currentGeo || null);
         const geo = effectiveGeo ? await resolveGeo(effectiveGeo, db) : null;
         const geoFilter = buildGeoFilter(geo);
         const projektFilter = buildProjektFilter(resolveProjekt(projektInput));
@@ -802,7 +810,11 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         }));
 
         const geoInfo = geo
-          ? { name: geo.display.name, level: geo.level }
+          ? {
+              name: geo.display.name,
+              level: geo.level,
+              ars: geo.gemeinde_ars ?? geo.verband_ars ?? geo.kreis_ars ?? geo.land_ars,
+            }
           : { name: "alle Ebenen", level: "alle" };
 
         return {
