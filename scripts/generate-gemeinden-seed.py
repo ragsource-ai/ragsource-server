@@ -92,8 +92,16 @@ for entry in destatis["daten"]:
 
     land, land_kurz = LAENDER.get(land_ars, ("", ""))
 
-    # Kreis-Name aus manuellem Mapping, sonst leer
-    kreis = kreise_map.get(kreis_ars, {}).get("name", "")
+    # Kreis-Name: manuelles Mapping bevorzugt
+    # Kreisfreie Städte (ars[5:] == '0000000'): Kreisname = Gemeindename (bereinigt)
+    is_kreisfrei = ars[5:] == "0000000"
+    if kreis_ars in kreise_map:
+        kreis = kreise_map[kreis_ars]["name"]
+    elif is_kreisfrei:
+        # z.B. "Flensburg, Stadt" → "Flensburg"
+        kreis = name.split(",")[0].strip()
+    else:
+        kreis = ""
 
     # Verband: Stellen 6–9 des ARS; wenn alle "0" → kein Verband
     has_verband = verband_ars_raw[5:] != "0000"
