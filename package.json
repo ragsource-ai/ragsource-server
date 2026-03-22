@@ -10,7 +10,8 @@
     "db:init:remote": "wrangler d1 execute ragsource-db-v2 --remote --file=schema.sql",
     "db:seed:local": "tsx scripts/build-db-v2.ts --local",
     "db:seed:remote": "tsx scripts/build-db-v2.ts --remote",
-    "db:seed:remote:content": "tsx scripts/build-db-v2.ts --remote --skip-gemeinden"
+    "db:seed:remote:content": "tsx scripts/build-db-v2.ts --remote --skip-gemeinden",
+    "test": "node --import tsx/esm --test scripts/sql-utils.test.ts"
   },
   "dependencies": {
     "agents": "^0.7.9",

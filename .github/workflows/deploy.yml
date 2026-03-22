@@ -59,6 +59,10 @@ jobs:
         run: npm ci
         working-directory: ragsource-server
 
+      - name: Tests ausfuehren
+        run: npm test
+        working-directory: ragsource-server
+
       - name: DB vollstaendig neu bauen (nur bei Schema-Aenderung)
         if: steps.detect.outputs.schema_changed == 'true'
         run: |

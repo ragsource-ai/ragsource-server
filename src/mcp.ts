@@ -643,12 +643,14 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
                 .first<{ section_ref: string; heading: string | null; body: string }>();
 
               // Fallback: LIKE-Suche (z.B. "§2" statt "§ 2")
+              // % und _ escapen, damit sie nicht als LIKE-Wildcards interpretiert werden
               if (!row) {
+                const escapedForLike = normalized.replace(/[%_\\]/g, "\\$&");
                 row = await db
                   .prepare(
-                    "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? AND section_ref LIKE ? LIMIT 1",
+                    "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? AND section_ref LIKE ? ESCAPE '\\' LIMIT 1",
                   )
-                  .bind(req.source, `%${normalized.replace(/\s+/g, "%")}%`)
+                  .bind(req.source, `%${escapedForLike.replace(/\s+/g, "%")}%`)
                   .first<{ section_ref: string; heading: string | null; body: string }>();
               }
 

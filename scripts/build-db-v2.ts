@@ -35,6 +35,7 @@ import { join, relative, basename } from "path";
 import { createHash } from "crypto";
 import matter from "gray-matter";
 import { execSync } from "child_process";
+import { esc, buildConcatTree } from "./sql-utils.js";
 
 // -----------------------------------------------------------------------
 // Konfiguration
@@ -98,44 +99,7 @@ const schemaDir = join(import.meta.dirname!, "..");
 // Hilfsfunktionen
 // -----------------------------------------------------------------------
 
-/**
- * SQL-Escaping: Zwei bekannte wrangler-Parser-Bugs werden umgangen:
- *
- * 1. '' → char(39): wrangler's splitSqlIntoStatements behandelt '' falsch
- *    → Statements werden zusammengemergt → SQLITE_TOOBIG.
- *
- * 2. -- → char(45,45): wrangler's Parser behandelt -- als Kommentar-Start,
- *    auch innerhalb quoted strings (z.B. "§§ 178 ----" in VwGO-Sections).
- *
- * Lineare || -Ketten würden bei Texten mit vielen Sonderzeichen SQLite's
- * SQLITE_EXPR_DEPTH_MAX (100) überschreiten (z.B. "§§ 1 -- 3"-Bereiche im SGB).
- * Fix: balancierter Binärbaum → Tiefe O(log N) statt O(N).
- */
-function buildConcatTree(tokens: string[]): string {
-  if (tokens.length === 0) return "''";
-  if (tokens.length === 1) return tokens[0];
-  const mid = Math.floor(tokens.length / 2);
-  return `(${buildConcatTree(tokens.slice(0, mid))} || ${buildConcatTree(tokens.slice(mid))})`;
-}
-
-function esc(val: unknown): string {
-  if (val == null) return "NULL";
-  const s = String(val);
-  if (!s.includes("'") && !s.includes("--")) return "'" + s + "'";
-
-  // Token-Liste: Textteile + char(39) für ' + char(45,45) für --
-  const tokens: string[] = [];
-  const dashParts = s.split("--");
-  for (let i = 0; i < dashParts.length; i++) {
-    if (i > 0) tokens.push("char(45,45)");
-    const apoParts = dashParts[i].split("'");
-    for (let j = 0; j < apoParts.length; j++) {
-      if (j > 0) tokens.push("char(39)");
-      tokens.push(`'${apoParts[j]}'`);
-    }
-  }
-  return buildConcatTree(tokens);
-}
+// esc() und buildConcatTree() sind in scripts/sql-utils.ts definiert (importiert oben).
 
 /** Schätzt Token-Anzahl: 1 Token ≈ 4 Zeichen (englisch/deutsch) */
 function estimateTokens(text: string): number {
