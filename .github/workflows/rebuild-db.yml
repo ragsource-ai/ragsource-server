@@ -1,12 +1,19 @@
 name: DB neu bauen (Content geaendert)
 
-# Laeuft wenn ragsource-content ein "content-updated-v2" Event schickt.
+# Laeuft wenn ragsource-content ein "content-updated-v2" Event schickt
+# oder manuell via GitHub Actions UI ausgeloest wird.
 # Baut nur die Datenbank neu -- der laufende Worker wird NICHT angefasst.
 # D1 ist persistent: neue Paragraphen sind sofort ueber den bestehenden Worker abrufbar.
 
 on:
   repository_dispatch:
     types: [content-updated-v2]
+  workflow_dispatch:
+    inputs:
+      full_rebuild:
+        description: "Vollstaendiger Rebuild (DROP + CREATE + alle Quellen neu)"
+        type: boolean
+        default: false
 
 jobs:
   rebuild:
@@ -38,8 +45,19 @@ jobs:
         working-directory: ragsource-server
 
       - name: DB inkrementell aktualisieren (remote D1, ohne Gemeinden-Seed)
+        if: ${{ inputs.full_rebuild != true }}
         run: |
           npx tsx scripts/build-db-v2.ts --remote --skip-gemeinden --incremental \
+            --content-root=$GITHUB_WORKSPACE/ragsource-content/regelungsrahmen
+        working-directory: ragsource-server
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: DB vollstaendig neu bauen (manuell, ohne Gemeinden-Seed)
+        if: ${{ inputs.full_rebuild == true }}
+        run: |
+          npx tsx scripts/build-db-v2.ts --remote --skip-gemeinden \
             --content-root=$GITHUB_WORKSPACE/ragsource-content/regelungsrahmen
         working-directory: ragsource-server
         env:
