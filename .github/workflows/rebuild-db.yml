@@ -37,9 +37,9 @@ jobs:
         run: npm ci
         working-directory: ragsource-server
 
-      - name: DB seeden (remote D1, ohne Gemeinden-Seed)
+      - name: DB inkrementell aktualisieren (remote D1, ohne Gemeinden-Seed)
         run: |
-          npx tsx scripts/build-db-v2.ts --remote --skip-gemeinden \
+          npx tsx scripts/build-db-v2.ts --remote --skip-gemeinden --incremental \
             --content-root=$GITHUB_WORKSPACE/ragsource-content/regelungsrahmen
         working-directory: ragsource-server
         env:

@@ -8,9 +8,17 @@
  *   4. FTS5-Rebuild → sections_fts
  *
  * Nutzung:
- *   npx tsx scripts/build-db-v2.ts --local    # Lokale D1
- *   npx tsx scripts/build-db-v2.ts --remote   # Remote D1
- *   npx tsx scripts/build-db-v2.ts --local --content-root=/pfad/zum/content
+ *   npx tsx scripts/build-db-v2.ts --local                              # Vollst. Rebuild (lokal)
+ *   npx tsx scripts/build-db-v2.ts --remote                             # Vollst. Rebuild (remote)
+ *   npx tsx scripts/build-db-v2.ts --remote --incremental               # Nur geänderte Quellen
+ *   npx tsx scripts/build-db-v2.ts --local --content-root=/pfad         # Custom Content-Root
+ *
+ * --incremental (Option B, Phase 4a):
+ *   Überspringt DROP/CREATE. Berechnet SHA-256 je Datei, lädt bestehende Hashes
+ *   aus der DB, verarbeitet nur neue/geänderte/gelöschte Quellen.
+ *   Erwartet: content_hash-Spalte in sources (wird per Migration angelegt falls fehlend).
+ *   Erster Lauf nach Upgrade: alle Quellen gelten als "geändert" (content_hash=NULL) →
+ *   vollständiger Re-Insert ohne DROP/CREATE. Ab dem zweiten Lauf echter Inkrementalbetrieb.
  *
  * (Dateiname build-db-v2.ts bleibt fuer Rueckwaertskompatibilitaet mit CI/CD bestehen)
  */
@@ -24,6 +32,7 @@ import {
   existsSync,
 } from "fs";
 import { join, relative, basename } from "path";
+import { createHash } from "crypto";
 import matter from "gray-matter";
 import { execSync } from "child_process";
 
@@ -66,6 +75,7 @@ const args = process.argv.slice(2);
 const isRemote = args.includes("--remote");
 const mode = isRemote ? "--remote" : "--local";
 const skipGemeinden = args.includes("--skip-gemeinden");
+const isIncremental = args.includes("--incremental");
 
 const contentRoots = args
   .filter((a) => a.startsWith("--content-root="))
@@ -77,9 +87,12 @@ if (contentRoots.length === 0) {
 }
 
 console.log(`📂 Content-Roots: ${contentRoots.join(", ")}`);
-console.log(`💾 Modus: ${mode}`);
+console.log(`💾 Modus: ${mode}${isIncremental ? " (inkrementell)" : ""}`);
 console.log(`🗄️  Datenbank: ${DB_NAME}`);
 if (skipGemeinden) console.log(`⏭️  --skip-gemeinden: Gemeinden-Tabelle wird nicht angefasst.`);
+
+// Basisverzeichnis (ragsource-server/) — wird in schema-, seed- und execute-Schritten gebraucht
+const schemaDir = join(import.meta.dirname!, "..");
 
 // -----------------------------------------------------------------------
 // Hilfsfunktionen
@@ -270,6 +283,70 @@ function findMarkdownFiles(dir: string): string[] {
   return files;
 }
 
+/** Berechnet SHA-256-Hash des Dateiinhalts (für inkrementelle Updates) */
+function computeHash(content: string): string {
+  return createHash("sha256").update(content, "utf-8").digest("hex");
+}
+
+/**
+ * Liest Daten aus D1 Remote via REST API (für --remote + --incremental).
+ * Gibt bei transientem Fehler eine leere Liste zurück (graceful degradation).
+ */
+async function queryD1Remote(sql: string): Promise<Record<string, unknown>[]> {
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+  if (!accountId || !apiToken) {
+    throw new Error(
+      "Für --remote werden CLOUDFLARE_ACCOUNT_ID und CLOUDFLARE_API_TOKEN als Env-Variablen benötigt.",
+    );
+  }
+  const url = `${CF_API_BASE}/accounts/${accountId}/d1/database/${D1_DB_ID}/query`;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ sql, params: [] as never[] }),
+      });
+      const data = (await res.json()) as {
+        success: boolean;
+        result?: Array<{ results: Record<string, unknown>[] }>;
+        errors?: { message: string }[];
+      };
+      if (!res.ok || !data.success) {
+        throw new Error(`D1 Query-Fehler HTTP ${res.status}: ${JSON.stringify(data.errors ?? data)}`);
+      }
+      return data.result?.[0]?.results ?? [];
+    } catch (e) {
+      if (attempt === 3) throw e;
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+  return [];
+}
+
+/**
+ * Liest Daten aus lokaler D1 via wrangler CLI (für --local + --incremental).
+ * Schreibt SQL in Temp-Datei um Shell-Escaping-Probleme zu vermeiden.
+ * Gibt bei Fehler (z.B. Spalte noch nicht vorhanden) eine leere Liste zurück.
+ */
+function queryD1Local(sql: string): Record<string, unknown>[] {
+  const queryFile = join(schemaDir, ".build-query-v2.sql");
+  writeFileSync(queryFile, sql, "utf-8");
+  try {
+    const out = execSync(
+      `npx wrangler d1 execute ${DB_NAME} --local --config=${WRANGLER_CONFIG} --file=.build-query-v2.sql --json`,
+      { cwd: schemaDir, stdio: "pipe" },
+    ).toString();
+    if (existsSync(queryFile)) unlinkSync(queryFile);
+    const parsed = JSON.parse(out) as Array<{ results?: Record<string, unknown>[] }>;
+    return parsed[0]?.results ?? [];
+  } catch {
+    if (existsSync(queryFile)) unlinkSync(queryFile);
+    return []; // Tabelle/Spalte existiert noch nicht → leere Liste
+  }
+}
+
 // -----------------------------------------------------------------------
 // Markdown-Parsing: TOC + Paragraphen
 // -----------------------------------------------------------------------
@@ -446,123 +523,176 @@ console.log(
 );
 
 // -----------------------------------------------------------------------
-// Schema anwenden: DROP + CREATE (idempotent)
+// Schema anwenden: DROP + CREATE (idempotent, nur bei vollständigem Rebuild)
 // -----------------------------------------------------------------------
 
-console.log("🗃️  Schema anwenden (DROP + CREATE)...");
+if (!isIncremental) {
+  console.log("🗃️  Schema anwenden (DROP + CREATE)...");
 
-const schemaDrop = [
-  "DROP TABLE IF EXISTS sections_fts;",
-  "DROP TABLE IF EXISTS source_relations;",
-  "DROP TABLE IF EXISTS source_sections;",
-  "DROP TABLE IF EXISTS source_tocs;",
-  "DROP TABLE IF EXISTS source_projekte;",
-  "DROP TABLE IF EXISTS sources;",
-  ...(skipGemeinden ? [] : [
-    "DROP TABLE IF EXISTS gemeinden;",
-    "DROP TABLE IF EXISTS geo_aliases;",
-  ]),
-].join("\n");
+  const schemaDrop = [
+    "DROP TABLE IF EXISTS sections_fts;",
+    "DROP TABLE IF EXISTS source_relations;",
+    "DROP TABLE IF EXISTS source_sections;",
+    "DROP TABLE IF EXISTS source_tocs;",
+    "DROP TABLE IF EXISTS source_projekte;",
+    "DROP TABLE IF EXISTS sources;",
+    ...(skipGemeinden ? [] : [
+      "DROP TABLE IF EXISTS gemeinden;",
+      "DROP TABLE IF EXISTS geo_aliases;",
+    ]),
+  ].join("\n");
 
-const schemaDir = join(import.meta.dirname!, "..");
-const schemaSql = readFileSync(join(schemaDir, SCHEMA_FILE), "utf-8");
+  const schemaSql = readFileSync(join(schemaDir, SCHEMA_FILE), "utf-8");
 
-const dropFile = join(schemaDir, ".build-drop-v2.sql");
-writeFileSync(dropFile, schemaDrop, "utf-8");
-try {
-  execSync(`npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-drop-v2.sql`, {
-    cwd: schemaDir,
-    stdio: "pipe",
-  });
-  console.log("  DROP ✅");
-} catch (e) {
-  console.error("❌ Fehler beim DROP:", e);
+  const dropFile = join(schemaDir, ".build-drop-v2.sql");
+  writeFileSync(dropFile, schemaDrop, "utf-8");
+  try {
+    execSync(`npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-drop-v2.sql`, {
+      cwd: schemaDir,
+      stdio: "pipe",
+    });
+    console.log("  DROP ✅");
+  } catch (e) {
+    console.error("❌ Fehler beim DROP:", e);
+    if (existsSync(dropFile)) unlinkSync(dropFile);
+    process.exit(1);
+  }
   if (existsSync(dropFile)) unlinkSync(dropFile);
-  process.exit(1);
-}
-if (existsSync(dropFile)) unlinkSync(dropFile);
 
-// Remote D1 benötigt nach DROP etwas Zeit, um den Durable Object zurückzusetzen
-if (isRemote) {
-  console.log("  ⏳ Warte 10s auf D1 DO-Reset...");
-  execSync("sleep 10");
-}
+  // Remote D1 benötigt nach DROP etwas Zeit, um den Durable Object zurückzusetzen
+  if (isRemote) {
+    console.log("  ⏳ Warte 10s auf D1 DO-Reset...");
+    execSync("sleep 10");
+  }
 
-const schemaOutFile = join(schemaDir, ".build-schema-v2.sql");
-writeFileSync(schemaOutFile, schemaSql, "utf-8");
-try {
-  execSync(`npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-schema-v2.sql`, {
-    cwd: schemaDir,
-    stdio: "pipe",
-  });
-  console.log("  CREATE + SEED ✅\n");
-} catch (e) {
-  console.error("❌ Fehler beim Schema-Anlegen:", e);
+  const schemaOutFile = join(schemaDir, ".build-schema-v2.sql");
+  writeFileSync(schemaOutFile, schemaSql, "utf-8");
+  try {
+    execSync(`npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-schema-v2.sql`, {
+      cwd: schemaDir,
+      stdio: "pipe",
+    });
+    console.log("  CREATE + SEED ✅\n");
+  } catch (e) {
+    console.error("❌ Fehler beim Schema-Anlegen:", e);
+    if (existsSync(schemaOutFile)) unlinkSync(schemaOutFile);
+    process.exit(1);
+  }
   if (existsSync(schemaOutFile)) unlinkSync(schemaOutFile);
-  process.exit(1);
-}
-if (existsSync(schemaOutFile)) unlinkSync(schemaOutFile);
 
-// Remote D1 benötigt auch nach CREATE etwas Zeit für DO-Replikation,
-// bevor die ersten INSERTs ankommen. Ohne Pause → UNIQUE constraint (alte Daten sichtbar).
-if (isRemote) {
-  console.log("  ⏳ Warte 10s auf D1 DO-Replikation nach CREATE...");
-  execSync("sleep 10");
+  // Remote D1 benötigt auch nach CREATE etwas Zeit für DO-Replikation,
+  // bevor die ersten INSERTs ankommen. Ohne Pause → UNIQUE constraint (alte Daten sichtbar).
+  if (isRemote) {
+    console.log("  ⏳ Warte 10s auf D1 DO-Replikation nach CREATE...");
+    execSync("sleep 10");
+  }
 }
 
 // -----------------------------------------------------------------------
 // Gemeinde-Seed: alle 10.944 deutschen Gemeinden aus Destatis GV-ISys
+// (nur bei vollständigem Rebuild)
 // -----------------------------------------------------------------------
 
-if (skipGemeinden) {
-  console.log("⏭️  Gemeinden-Seed übersprungen (--skip-gemeinden).\n");
-} else {
-  const gemeindenSeedFile = join(schemaDir, "data", "seed-gemeinden-all.sql");
-  if (existsSync(gemeindenSeedFile)) {
-    const gemeindenSql = readFileSync(gemeindenSeedFile, "utf-8");
-    const gemeindenStatements = gemeindenSql
-      .split("\n")
-      .filter((l) => l.startsWith("INSERT"));
+if (!isIncremental) {
+  if (skipGemeinden) {
+    console.log("⏭️  Gemeinden-Seed übersprungen (--skip-gemeinden).\n");
+  } else {
+    const gemeindenSeedFile = join(schemaDir, "data", "seed-gemeinden-all.sql");
+    if (existsSync(gemeindenSeedFile)) {
+      const gemeindenSql = readFileSync(gemeindenSeedFile, "utf-8");
+      const gemeindenStatements = gemeindenSql
+        .split("\n")
+        .filter((l) => l.startsWith("INSERT"));
 
-    const gemeindenBatches: string[][] = [];
-    for (let i = 0; i < gemeindenStatements.length; i += BATCH_SIZE) {
-      gemeindenBatches.push(gemeindenStatements.slice(i, i + BATCH_SIZE));
-    }
-
-    console.log(`\n🏘️  Gemeinden-Seed (${gemeindenStatements.length} Einträge, ${gemeindenBatches.length} Batches)...`);
-    if (isRemote) {
-      try {
-        await executeBatchesConcurrent(gemeindenBatches, API_CONCURRENCY);
-      } catch (e) {
-        console.error("\n❌ Fehler beim Gemeinden-Seed:", e);
-        process.exit(1);
+      const gemeindenBatches: string[][] = [];
+      for (let i = 0; i < gemeindenStatements.length; i += BATCH_SIZE) {
+        gemeindenBatches.push(gemeindenStatements.slice(i, i + BATCH_SIZE));
       }
-    } else {
-      const gemeindenFile = join(schemaDir, ".build-gemeinden-v2.sql");
-      let gBatchNum = 0;
-      for (const batch of gemeindenBatches) {
-        gBatchNum++;
-        process.stdout.write(`  Batch ${gBatchNum}/${gemeindenBatches.length}... `);
-        writeFileSync(gemeindenFile, batch.join("\n"), "utf-8");
+
+      console.log(`\n🏘️  Gemeinden-Seed (${gemeindenStatements.length} Einträge, ${gemeindenBatches.length} Batches)...`);
+      if (isRemote) {
         try {
-          execWithRetry(
-            `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-gemeinden-v2.sql`,
-            { cwd: schemaDir, stdio: "pipe" },
-          );
-          process.stdout.write("✅\n");
+          await executeBatchesConcurrent(gemeindenBatches, API_CONCURRENCY);
         } catch (e) {
-          process.stdout.write("❌\n");
-          console.error(`❌ Fehler in Gemeinden-Batch ${gBatchNum}:`, e);
-          if (existsSync(gemeindenFile)) unlinkSync(gemeindenFile);
+          console.error("\n❌ Fehler beim Gemeinden-Seed:", e);
           process.exit(1);
         }
+      } else {
+        const gemeindenFile = join(schemaDir, ".build-gemeinden-v2.sql");
+        let gBatchNum = 0;
+        for (const batch of gemeindenBatches) {
+          gBatchNum++;
+          process.stdout.write(`  Batch ${gBatchNum}/${gemeindenBatches.length}... `);
+          writeFileSync(gemeindenFile, batch.join("\n"), "utf-8");
+          try {
+            execWithRetry(
+              `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-gemeinden-v2.sql`,
+              { cwd: schemaDir, stdio: "pipe" },
+            );
+            process.stdout.write("✅\n");
+          } catch (e) {
+            process.stdout.write("❌\n");
+            console.error(`❌ Fehler in Gemeinden-Batch ${gBatchNum}:`, e);
+            if (existsSync(gemeindenFile)) unlinkSync(gemeindenFile);
+            process.exit(1);
+          }
+        }
+        if (existsSync(gemeindenFile)) unlinkSync(gemeindenFile);
       }
-      if (existsSync(gemeindenFile)) unlinkSync(gemeindenFile);
+      console.log("  Gemeinden-Seed ✅\n");
+    } else {
+      console.log("  ⚠️  data/seed-gemeinden-all.sql nicht gefunden — nur die 7 Einträge aus schema.sql.\n");
     }
-    console.log("  Gemeinden-Seed ✅\n");
-  } else {
-    console.log("  ⚠️  data/seed-gemeinden-all.sql nicht gefunden — nur die 7 Einträge aus schema.sql.\n");
   }
+}
+
+// -----------------------------------------------------------------------
+// Inkrementeller Modus: Migration + bestehende Hashes laden
+// -----------------------------------------------------------------------
+
+// existingHashes: sourceId → content_hash (null = Spalte noch nicht befüllt → gilt als geändert)
+const existingHashes = new Map<string, string | null>();
+// seenIdsForDiff: alle Source-IDs aus dem File-Scan (nur in --incremental befüllt)
+const seenIdsForDiff = new Set<string>();
+
+if (isIncremental) {
+  console.log("⚡ Inkrementeller Modus: Prüfe Migration...");
+
+  // content_hash-Spalte anlegen, falls noch nicht vorhanden (erste Nutzung nach Upgrade)
+  const migrateSQL = "ALTER TABLE sources ADD COLUMN content_hash TEXT;";
+  if (isRemote) {
+    try {
+      await fetchD1Batch([migrateSQL]);
+      console.log("  content_hash-Spalte angelegt ✅");
+    } catch {
+      console.log("  content_hash-Spalte bereits vorhanden.");
+    }
+  } else {
+    const migrateFile = join(schemaDir, ".build-migrate-v2.sql");
+    writeFileSync(migrateFile, migrateSQL, "utf-8");
+    try {
+      execSync(
+        `npx wrangler d1 execute ${DB_NAME} --local --config=${WRANGLER_CONFIG} --file=.build-migrate-v2.sql`,
+        { cwd: schemaDir, stdio: "pipe" },
+      );
+      console.log("  content_hash-Spalte angelegt ✅");
+    } catch {
+      console.log("  content_hash-Spalte bereits vorhanden.");
+    } finally {
+      if (existsSync(migrateFile)) unlinkSync(migrateFile);
+    }
+  }
+
+  // Bestehende Hashes aus DB laden
+  console.log("  Lade bestehende Hashes aus DB...");
+  const rows = isRemote
+    ? await queryD1Remote("SELECT id, content_hash FROM sources")
+    : queryD1Local("SELECT id, content_hash FROM sources");
+
+  for (const row of rows) {
+    existingHashes.set(row.id as string, (row.content_hash as string | null) ?? null);
+  }
+  console.log(`  ${existingHashes.size} bestehende Quellen geladen.\n`);
 }
 
 // -----------------------------------------------------------------------
@@ -575,7 +705,11 @@ const tailStatements: string[] = [];
 
 let imported = 0;
 let skipped = 0;
+let skippedUnchanged = 0;
+let newCount = 0;
+let changedCount = 0;
 let sectionTotal = 0;
+const deleteIds: string[] = []; // IDs die gelöscht/überschrieben werden (--incremental)
 
 // Source-IDs zur Deduplizierung tracken
 const seenIds = new Map<string, string>(); // id → filePath
@@ -619,6 +753,28 @@ for (const { file, root } of mdFilesWithRoot) {
   }
   seenIds.set(sourceId, file);
 
+  // Hash berechnen (immer — für inkrementelle Updates und full-rebuild content_hash-Seeding)
+  const fileHash = computeHash(raw);
+
+  // Inkrementeller Modus: nur geänderte/neue Dateien verarbeiten
+  if (isIncremental) {
+    seenIdsForDiff.add(sourceId);
+    const existingHash = existingHashes.get(sourceId);
+    if (existingHash === fileHash) {
+      // Unverändert — überspringen
+      skippedUnchanged++;
+      continue;
+    }
+    if (existingHashes.has(sourceId)) {
+      // Geändert → erst löschen, dann neu einfügen (CASCADE-Delete entfernt Sections + TOC)
+      deleteIds.push(sourceId);
+      changedCount++;
+    } else {
+      // Neue Quelle
+      newCount++;
+    }
+  }
+
   // Markdown-Body parsen (TOC + §§)
   const body = parsed.content;
   const { toc, sections } = parseDocument(body);
@@ -652,15 +808,15 @@ for (const { file, root } of mdFilesWithRoot) {
   // --- SQL-Gruppe für diese Quelle ---
   const group: string[] = [];
 
-  // 1. sources-Eintrag
+  // 1. sources-Eintrag (inkl. content_hash für spätere inkrementelle Updates)
   group.push(
-    `INSERT INTO sources (id, titel, kurzbezeichnung, typ, ebene, land_ars, kreis_ars, verband_ars, gemeinde_ars, section_count, total_tokens, size_class, gueltig_ab, quelle, dateipfad, url, beschreibung, stand, rechtsrang, rechtsrang_label) VALUES (` +
+    `INSERT INTO sources (id, titel, kurzbezeichnung, typ, ebene, land_ars, kreis_ars, verband_ars, gemeinde_ars, section_count, total_tokens, size_class, gueltig_ab, quelle, dateipfad, url, beschreibung, stand, rechtsrang, rechtsrang_label, content_hash) VALUES (` +
     `${esc(sourceId)}, ${esc(fm.titel)}, ${esc(fm.kurzbezeichnung || null)}, ${esc(fm.typ || null)}, ${esc(ebene)}, ` +
     `${esc(land_ars)}, ${esc(kreis_ars)}, ${esc(verband_ars)}, ${esc(gemeinde_ars)}, ` +
     `${sections.length}, ${totalTokens}, ${esc(sizeClass)}, ` +
     `${esc(fm.gueltig_ab || null)}, ${esc(fm.quelle || null)}, ${esc(dateipfad)}, ` +
     `${esc(fm.url || null)}, ${esc(fm.beschreibung || null)}, ${esc(fm.stand || null)}, ` +
-    `${rechtsrang ?? "NULL"}, ${esc(rechtsrang_label)});`,
+    `${rechtsrang ?? "NULL"}, ${esc(rechtsrang_label)}, ${esc(fileHash)});`,
   );
 
   // 2. source_projekte
@@ -708,10 +864,33 @@ for (const { file, root } of mdFilesWithRoot) {
 // FTS5-Rebuild am Ende (muss nach allen Inserts kommen)
 tailStatements.push("INSERT INTO sections_fts(sections_fts) VALUES('rebuild');");
 
+// Gelöschte Quellen identifizieren (im DB vorhanden, aber keine Datei mehr)
+let deletedCount = 0;
+if (isIncremental) {
+  for (const [id] of existingHashes) {
+    if (!seenIdsForDiff.has(id)) {
+      deleteIds.push(id);
+      deletedCount++;
+      console.log(`  🗑️  Quelle nicht mehr vorhanden: ${id}`);
+    }
+  }
+}
+
 console.log(`\n📊 Zusammenfassung:`);
-console.log(`   ${imported} Quellen importiert, ${skipped} übersprungen`);
-console.log(`   ${sectionTotal} Paragraphen/Abschnitte total`);
-console.log(`   ${articleGroups.reduce((s, g) => s + g.length, 0) + tailStatements.length} SQL-Statements gesamt`);
+if (isIncremental) {
+  console.log(`   ${newCount} neu, ${changedCount} geändert, ${skippedUnchanged} unverändert, ${deletedCount} gelöscht`);
+  console.log(`   ${sectionTotal} Paragraphen/Abschnitte (neu/geändert)`);
+  console.log(`   ${articleGroups.reduce((s, g) => s + g.length, 0)} SQL-Statements (INSERT)`);
+  const totalChanges = newCount + changedCount + deletedCount;
+  if (totalChanges === 0) {
+    console.log("\n✅ Keine Änderungen — Datenbank ist aktuell.");
+    process.exit(0);
+  }
+} else {
+  console.log(`   ${imported} Quellen importiert, ${skipped} übersprungen`);
+  console.log(`   ${sectionTotal} Paragraphen/Abschnitte total`);
+  console.log(`   ${articleGroups.reduce((s, g) => s + g.length, 0) + tailStatements.length} SQL-Statements gesamt`);
+}
 
 // -----------------------------------------------------------------------
 // Batching (Artikelgrenzen respektieren, wie v1)
@@ -733,41 +912,145 @@ if (currentBatch.length > 0) {
   batches.push(currentBatch);
 }
 
-console.log(`\n🚀 Führe SQL aus (${mode}) in ${batches.length} Content-Batches + FTS5-Rebuild...`);
+// -----------------------------------------------------------------------
+// Ausführen
+// -----------------------------------------------------------------------
 
-if (isRemote) {
-  // Remote: D1 REST API mit Parallelität (kein wrangler-CLI-Spawn pro Batch)
-  try {
-    await executeBatchesConcurrent(batches, API_CONCURRENCY);
-    process.stdout.write("  FTS5-Rebuild... ");
-    await fetchD1Batch(tailStatements);
-    process.stdout.write("✅\n");
-  } catch (e) {
-    console.error("\n❌ Fehler beim Content-Seed:", e);
-    process.exit(1);
+if (isIncremental) {
+  // Inkrementell: 1. DELETE geänderte+gelöschte → 2. INSERT neue+geänderte → 3. FTS5-Rebuild
+
+  // 1. DELETE (sequentiell, vor den INSERTs — CASCADE entfernt Sections + TOCs automatisch)
+  if (deleteIds.length > 0) {
+    const deleteStatements = deleteIds.map((id) => `DELETE FROM sources WHERE id = ${esc(id)};`);
+    console.log(`\n🗑️  Lösche ${deleteIds.length} Quelle(n) (${mode})...`);
+    if (isRemote) {
+      try {
+        await fetchD1Batch(deleteStatements);
+        console.log("  DELETE ✅");
+      } catch (e) {
+        console.error("❌ Fehler beim DELETE:", e);
+        process.exit(1);
+      }
+    } else {
+      const delFile = join(schemaDir, ".build-delete-v2.sql");
+      writeFileSync(delFile, deleteStatements.join("\n"), "utf-8");
+      try {
+        execWithRetry(
+          `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-delete-v2.sql`,
+          { cwd: schemaDir, stdio: "pipe" },
+        );
+        console.log("  DELETE ✅");
+      } catch (e) {
+        console.error("❌ Fehler beim DELETE:", e);
+        if (existsSync(delFile)) unlinkSync(delFile);
+        process.exit(1);
+      }
+      if (existsSync(delFile)) unlinkSync(delFile);
+    }
   }
-} else {
-  // Local: wrangler CLI (kein API-Token nötig)
-  const sqlFile = join(schemaDir, ".build-seed-v2.sql");
-  let batchNum = 0;
-  for (const batch of [...batches, tailStatements]) {
-    batchNum++;
-    process.stdout.write(`  Batch ${batchNum}/${batches.length + 1}... `);
-    writeFileSync(sqlFile, batch.join("\n"), "utf-8");
+
+  // 2. INSERT neue + geänderte Quellen
+  if (batches.length > 0) {
+    console.log(`\n📥 Füge ${imported} Quelle(n) ein (${batches.length} Batch(es), ${mode})...`);
+    if (isRemote) {
+      try {
+        await executeBatchesConcurrent(batches, API_CONCURRENCY);
+      } catch (e) {
+        console.error("\n❌ Fehler beim Content-Insert:", e);
+        process.exit(1);
+      }
+    } else {
+      const sqlFile = join(schemaDir, ".build-seed-v2.sql");
+      let batchNum = 0;
+      for (const batch of batches) {
+        batchNum++;
+        process.stdout.write(`  Batch ${batchNum}/${batches.length}... `);
+        writeFileSync(sqlFile, batch.join("\n"), "utf-8");
+        try {
+          execWithRetry(
+            `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-seed-v2.sql`,
+            { cwd: schemaDir, stdio: "pipe" },
+          );
+          process.stdout.write("✅\n");
+        } catch (e) {
+          process.stdout.write("❌\n");
+          console.error(`❌ Fehler in Batch ${batchNum}:`, e);
+          if (existsSync(sqlFile)) unlinkSync(sqlFile);
+          process.exit(1);
+        }
+      }
+      if (existsSync(sqlFile)) unlinkSync(sqlFile);
+    }
+  }
+
+  // 3. FTS5-Rebuild (stellt Konsistenz nach DELETE+INSERT sicher; FTS5-Trigger pflegen
+  //    automatisch, aber expliziter Rebuild ist idempotent und zuverlässiger)
+  process.stdout.write("\n  FTS5-Rebuild... ");
+  if (isRemote) {
+    try {
+      await fetchD1Batch(tailStatements);
+      process.stdout.write("✅\n");
+    } catch (e) {
+      process.stdout.write("❌\n");
+      console.error("❌ Fehler beim FTS5-Rebuild:", e);
+      process.exit(1);
+    }
+  } else {
+    const ftsFile = join(schemaDir, ".build-fts-v2.sql");
+    writeFileSync(ftsFile, tailStatements.join("\n"), "utf-8");
     try {
       execWithRetry(
-        `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-seed-v2.sql`,
+        `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-fts-v2.sql`,
         { cwd: schemaDir, stdio: "pipe" },
       );
       process.stdout.write("✅\n");
     } catch (e) {
       process.stdout.write("❌\n");
-      console.error(`❌ Fehler in Batch ${batchNum}:`, e);
-      if (existsSync(sqlFile)) unlinkSync(sqlFile);
+      console.error("❌ Fehler beim FTS5-Rebuild:", e);
+      if (existsSync(ftsFile)) unlinkSync(ftsFile);
       process.exit(1);
     }
+    if (existsSync(ftsFile)) unlinkSync(ftsFile);
   }
-  if (existsSync(sqlFile)) unlinkSync(sqlFile);
+
+} else {
+  // Vollständiger Rebuild: gleiche Logik wie bisher
+  console.log(`\n🚀 Führe SQL aus (${mode}) in ${batches.length} Content-Batches + FTS5-Rebuild...`);
+
+  if (isRemote) {
+    // Remote: D1 REST API mit Parallelität (kein wrangler-CLI-Spawn pro Batch)
+    try {
+      await executeBatchesConcurrent(batches, API_CONCURRENCY);
+      process.stdout.write("  FTS5-Rebuild... ");
+      await fetchD1Batch(tailStatements);
+      process.stdout.write("✅\n");
+    } catch (e) {
+      console.error("\n❌ Fehler beim Content-Seed:", e);
+      process.exit(1);
+    }
+  } else {
+    // Local: wrangler CLI (kein API-Token nötig)
+    const sqlFile = join(schemaDir, ".build-seed-v2.sql");
+    let batchNum = 0;
+    for (const batch of [...batches, tailStatements]) {
+      batchNum++;
+      process.stdout.write(`  Batch ${batchNum}/${batches.length + 1}... `);
+      writeFileSync(sqlFile, batch.join("\n"), "utf-8");
+      try {
+        execWithRetry(
+          `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-seed-v2.sql`,
+          { cwd: schemaDir, stdio: "pipe" },
+        );
+        process.stdout.write("✅\n");
+      } catch (e) {
+        process.stdout.write("❌\n");
+        console.error(`❌ Fehler in Batch ${batchNum}:`, e);
+        if (existsSync(sqlFile)) unlinkSync(sqlFile);
+        process.exit(1);
+      }
+    }
+    if (existsSync(sqlFile)) unlinkSync(sqlFile);
+  }
 }
 
-console.log("\n✅ v2-Datenbank erfolgreich befüllt!");
+console.log("\n✅ Datenbank erfolgreich aktualisiert!");

@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS sources (
   beschreibung TEXT,            -- Kurzbeschreibung für Catalog (1-2 Sätze)
   stand TEXT,                   -- Datum der letzten inhaltlichen Änderung (ISO-Datum)
   rechtsrang INTEGER,           -- 1=Bundesrecht, 2=Landesrecht, 3=Kreisrecht, 4=Verbandsrecht, 5=Ortsrecht, 6=Tarifrecht
-  rechtsrang_label TEXT         -- "Bundesrecht", "Landesrecht BW", "Kreisrecht", "Verbandsrecht", "Ortsrecht", "Tarifrecht"
+  rechtsrang_label TEXT,        -- "Bundesrecht", "Landesrecht BW", "Kreisrecht", "Verbandsrecht", "Ortsrecht", "Tarifrecht"
+  content_hash TEXT             -- SHA-256 des Dateiinhalts (für inkrementelle Updates via --incremental)
 );
 
 CREATE INDEX IF NOT EXISTS idx_sources_ebene ON sources(ebene);
