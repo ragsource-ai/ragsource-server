@@ -22,17 +22,26 @@ export interface ResolvedGeo {
   };
 }
 
+export interface AmbiguousGeo {
+  ambiguous: true;
+  input: string;
+  candidates: Array<{ name: string; kreis: string; land: string; ars: string }>;
+}
+
 /**
  * Hauptfunktion: Löst einen `geo`-Parameter auf.
  *
  * - Nur Ziffern → ARS direkt, Ebene aus Länge
  * - Nicht-numerisch → geo_aliases Lookup (ohne typ-Filter)
+ * - Kein Alias-Match → gemeinden.name exakter Lookup
+ *   - 1 Treffer → direkt auflösen
+ *   - >1 Treffer → AmbiguousGeo (Kandidatenliste)
  * - Kein Match → null
  */
 export async function resolveGeo(
   input: string,
   db: D1Database,
-): Promise<ResolvedGeo | null> {
+): Promise<ResolvedGeo | AmbiguousGeo | null> {
   const trimmed = input.trim();
   if (!trimmed) return null;
 
@@ -62,6 +71,32 @@ export async function resolveGeo(
     if (norm) {
       return resolveArsUpward(norm.ars, db);
     }
+  }
+
+  // Kein Alias-Treffer → gemeinden.name exakter Lookup (case-insensitive)
+  // Beide Varianten probieren: Originalschreibung + normalisiert (Umlaut-Fallback)
+  type GemeindeRow = { ars: string; name: string; kreis: string; land: string };
+  const nameQuery = "SELECT ars, name, kreis, land FROM gemeinden WHERE LOWER(name) = ? LIMIT 20";
+
+  let rows: GemeindeRow[] = [];
+  const r1 = await db.prepare(nameQuery).bind(lower).all<GemeindeRow>();
+  rows = r1.results ?? [];
+
+  if (rows.length === 0 && normalized !== lower) {
+    const r2 = await db.prepare(nameQuery).bind(normalized).all<GemeindeRow>();
+    rows = r2.results ?? [];
+  }
+
+  if (rows.length === 1) {
+    return resolveArsUpward(rows[0].ars, db);
+  }
+
+  if (rows.length > 1) {
+    return {
+      ambiguous: true,
+      input: trimmed,
+      candidates: rows.map((r) => ({ name: r.name, kreis: r.kreis, land: r.land, ars: r.ars })),
+    };
   }
 
   return null;

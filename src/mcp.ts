@@ -21,7 +21,7 @@ import type {
   SectionResult,
   QueryHit,
 } from "./types.js";
-import { resolveGeo, type ResolvedGeo } from "./engine/normalize.js";
+import { resolveGeo, type ResolvedGeo, type AmbiguousGeo } from "./engine/normalize.js";
 
 // -----------------------------------------------------------------------
 // Geo-Filter für die sources-Tabelle
@@ -221,6 +221,39 @@ function resolveProjekt(explicitProjekt: string | undefined): string | undefined
 }
 
 // -----------------------------------------------------------------------
+// Geo-Hilfsfunktionen
+// -----------------------------------------------------------------------
+
+/**
+ * Baut eine frühe MCP-Antwort für mehrdeutige Geo-Angaben.
+ * Gibt eine Kandidatenliste + Support-Hinweis zurück, ohne Quellen zu liefern.
+ */
+function buildAmbiguousResponse(
+  ambiguous: AmbiguousGeo,
+  systemMessage: string | null,
+): { content: Array<{ type: "text"; text: string }> } {
+  const list = ambiguous.candidates
+    .map((c) => `• ${c.name} (${c.kreis}, ${c.land}) — ARS: ${c.ars}`)
+    .join("\n");
+
+  const payload = {
+    ...(systemMessage && { system_message: systemMessage }),
+    error: "geo_ambiguous",
+    geo: { name: `"${ambiguous.input}" (mehrdeutig)`, level: "unbekannt" },
+    hinweis:
+      `Der Ortsname "${ambiguous.input}" ist nicht eindeutig — es gibt mehrere Gemeinden mit diesem Namen. ` +
+      `Bitte den Nutzer fragen, welche Gemeinde gemeint ist, und den geo-Parameter mit dem entsprechenden ARS-Code erneut aufrufen.\n\n` +
+      `Gefundene Treffer:\n${list}\n\n` +
+      `Bei Fragen oder falls die gesuchte Gemeinde nicht aufgeführt ist: support@amtsschimmel.ai`,
+    candidates: ambiguous.candidates,
+  };
+
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+  };
+}
+
+// -----------------------------------------------------------------------
 // MCP Agent
 // -----------------------------------------------------------------------
 
@@ -317,8 +350,19 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         // _currentGeo wird per fetch() pro Request gesetzt — robuster als sessionGeo-Closure,
         // die beim DO-Reuse stale sein kann.
         const effectiveGeo = geoInput ?? (this._currentGeo || null);
-        const geo = effectiveGeo ? await resolveGeo(effectiveGeo, db) : null;
-        const geoFilter = buildGeoFilter(geo);
+        const geoResult = effectiveGeo ? await resolveGeo(effectiveGeo, db) : null;
+
+        // Mehrdeutiger Geo → früher Abbruch mit Kandidatenliste
+        if (geoResult && "ambiguous" in geoResult) {
+          return buildAmbiguousResponse(geoResult, systemMessage);
+        }
+
+        const geo = geoResult as ResolvedGeo | null;
+        // Geo wurde angegeben aber konnte nicht aufgelöst werden (kein Alias, kein Gemeindename)
+        const geoUnresolved = effectiveGeo !== null && geo === null;
+        const geoFilter = geoUnresolved
+          ? { sql: "s.rechtsrang <= 2", params: [] as unknown[] }  // EU + Bund + Land BW
+          : buildGeoFilter(geo);
         const projektFilter = buildProjektFilter(resolveProjekt(projektInput));
 
         // Quellen abfragen — alle Felder, die das LLM braucht
@@ -369,16 +413,19 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
               level: geo.level,
               ars: geo.gemeinde_ars ?? geo.verband_ars ?? geo.kreis_ars ?? geo.land_ars,
             }
-          : { name: "alle Ebenen", level: "alle" };
+          : geoUnresolved
+            ? { name: `"${effectiveGeo}" (nicht gefunden)`, level: "unbekannt" }
+            : { name: "alle Ebenen", level: "alle" };
 
-        // Nicht-konfiguriert-Fall: Gemeinde-Ebene angefragt, aber keine Gemeinde-Quellen vorhanden.
-        // Übergeordnete Quellen (Land, Kreis, Verband) können trotzdem vorhanden sein → werden angezeigt.
+        // Nicht-konfiguriert-Fall:
+        // a) Geo nicht auflösbar (kein Alias, kein Gemeindename) → nur EU/Bund/Land angezeigt
+        // b) Gemeinde-Ebene aufgelöst, aber keine Gemeinde-Quellen vorhanden
         const notConfigured =
-          geo?.level === "gemeinde" &&
-          !catalog.some((s) => s.ebene === "gemeinde");
+          geoUnresolved ||
+          (geo?.level === "gemeinde" && !catalog.some((s) => s.ebene === "gemeinde"));
         const notConfiguredHinweis = notConfigured
           ? (notConfiguredMessage ??
-              `Hinweis an den Assistenten: Die Gemeinde ${geoInfo.name} ist noch nicht als eigenständige Rechtsquelle hinterlegt. ` +
+              `Hinweis an den Assistenten: Die Gemeinde "${effectiveGeo ?? geoInfo.name}" ist noch nicht als eigenständige Rechtsquelle hinterlegt. ` +
               `Es werden nur übergeordnete Regelungen angezeigt (z.B. Landes-, Kreis- oder Verbandsrecht — bitte konkret aus dem Catalog benennen). ` +
               `Weise den Nutzer darauf hin, dass gemeindespezifische Satzungen fehlen und die Gemeinde noch nicht aufgenommen wurde.`)
           : undefined;
@@ -739,7 +786,9 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         // _currentGeo wird per fetch() pro Request gesetzt — robuster als sessionGeo-Closure,
         // die beim DO-Reuse stale sein kann.
         const effectiveGeo = geoInput ?? (this._currentGeo || null);
-        const geo = effectiveGeo ? await resolveGeo(effectiveGeo, db) : null;
+        const geoResult = effectiveGeo ? await resolveGeo(effectiveGeo, db) : null;
+        // Bei ambiguem Geo im query-Tool: kein Geo-Filter (FTS sucht im Gesamtbestand)
+        const geo = (geoResult && "ambiguous" in geoResult ? null : geoResult) as ResolvedGeo | null;
         const geoFilter = buildGeoFilter(geo);
         const projektFilter = buildProjektFilter(resolveProjekt(projektInput));
 
