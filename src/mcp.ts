@@ -171,27 +171,22 @@ function buildFtsQuery(input: string): string | null {
 // Vollständige Masterprompts → src/prompts/*.md (Claude.ai Projekt-System-Prompt)
 // -----------------------------------------------------------------------
 
-/** Generische Kurzbeschreibung (Fallback wenn kein Projekt erkannt) */
+/** Generische Kurzbeschreibung — gilt für alle RAGSource-Projekte */
 const INSTRUCTIONS_DEFAULT =
-  "RAGSource — kommunale Wissensdatenbank (Gesetze, Satzungen, Verordnungen).\n" +
-  "Workflow: RAGSource_catalog → RAGSource_toc für medium/large-Quellen → RAGSource_get.\n" +
-  "RAGSource_query nur als Fallback.";
+  "RAGSource — Agentic RAG Framework.\n" +
+  "\n" +
+  "Workflow: RAGSource_catalog → RAGSource_toc (medium/large) → RAGSource_get. " +
+  "RAGSource_query nur als Fallback, wenn Quelle unklar oder Catalog kein Ergebnis liefert.\n" +
+  "\n" +
+  "Normenhierarchie: Höherrangiges Recht bricht niederrangiges (z.B. Bundesgesetz > Landesgesetz). " +
+  "Bei Konflikten: höherrangige Norm zitieren, Widerspruch benennen.";
 
 /**
- * Kurzbeschreibung für amtsschimmel.ai (mit optionalem geo-Hinweis).
+ * Kurzbeschreibung für amtsschimmel.ai — ergänzt den Default um den Geo-Kontext.
  * @param geo ARS-Code aus ?geo= URL-Parameter (z.B. "081175009012") oder null
  */
 function buildInstructionsAmtsschimmel(geo: string | null): string {
-  const geoHint = geo ? ` (geo="${geo}")` : "";
-  return (
-    "amtsschimmel.ai — kommunale Wissensdatenbank (powered by RAGSource).\n" +
-    `Workflow: RAGSource_catalog${geoHint} → RAGSource_toc für medium/large-Quellen` +
-    " → RAGSource_get für Originalwortlaut und Einzelparagrafen aus ToC.\n" +
-    "RAGSource_query nur als Fallback.\n" +
-    "Rechtsrang (Normenhierarchie): 0=EU-Recht > 1=Bundesrecht > 2=Landesrecht > 3=Kreisrecht > 4=Verbandsrecht > 5=Ortsrecht > 6=Tarifrecht. " +
-    "Höherrangige Quellen haben Vorrang. Bei Konflikten zwischen Quellen: Widerspruch benennen, höherrangige Norm zitieren, " +
-    "ggf. Anpassung der niederrangigen Quelle empfehlen."
-  );
+  return INSTRUCTIONS_DEFAULT + (geo ? `\nGeo-Kontext: geo="${geo}" — diesen Wert an alle Tools übergeben.` : "");
 }
 
 /** Mappt Projekt-Slugs auf ihre Instructions-Builder-Funktionen */
@@ -283,23 +278,22 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     this.server.tool(
       "RAGSource_catalog",
-      "Pflichtaufruf zu Beginn jeder Anfrage — Einstiegspunkt fuer alle Rechts-, Satzungs- und " +
-      "Verwaltungsfragen (Baurecht, Gemeindeordnung, Satzungen, Gebuehren, Foerderung, u.v.m.). " +
-      "Liefert alle verfuegbaren Rechtsquellen fuer eine Gemeinde/Region (Ortsrecht bis EU-Recht). " +
-      "Jeder Eintrag: id, titel, typ, ebene, size_class, toc_available, beschreibung. " +
-      "size_class bestimmt das weitere Vorgehen: " +
-      "'small' → RAGSource_get direkt aufrufen (komplettes Dokument, kein TOC noetig); " +
-      "'medium'/'large' → zuerst RAGSource_toc aufrufen, dann gezielte §§ per RAGSource_get laden. " +
-      "Gibt optional ein Feld 'system_message' zurueck — dieses immer zuerst ausgeben.",
+      "SCHRITT 1 — Pflichtaufruf zu Beginn jeder Anfrage. " +
+      "Liefert alle verfügbaren Rechtsquellen für eine Gemeinde/Region (EU- bis Ortsrecht). " +
+      "Jeder Eintrag: id, titel, typ, ebene, rechtsrang, rechtsrang_label, size_class, toc_available, beschreibung. " +
+      "size_class steuert den Folgeschritt: " +
+      "'small' → RAGSource_get direkt (kein TOC nötig); " +
+      "'medium'/'large' → RAGSource_toc aufrufen, dann gezielte §§ per RAGSource_get laden. " +
+      "Gibt optional 'system_message' zurück — dieses immer zuerst ausgeben.",
       {
         geo: z
           .string()
           .optional()
           .describe(
             "ARS-Code (2/5/9/12 Stellen) oder Gemeindename. " +
-            "Bestimmt welche Rechtsebenen zurueckgegeben werden (Nur-aufwaerts-Prinzip). " +
+            "Bestimmt welche Rechtsebenen zurückgegeben werden (Nur-aufwärts-Prinzip). " +
             "12-stellig=Gemeinde, 9-stellig=Verband, 5-stellig=Kreis, 2-stellig=Land. " +
-            "Beispiele: '081175009012' (Bad Boll), '08117' (LKR Goeppingen), '08' (BW).",
+            "Beispiele: '081175009012' (Bad Boll), '08117' (LKR Göppingen), '08' (BW).",
           ),
         projekt: z
           .string()
@@ -417,12 +411,12 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     this.server.tool(
       "RAGSource_toc",
-      "SCHRITT 2 — Fuer 'medium'/'large'-Quellen aufrufen, bevor RAGSource_get verwendet wird. " +
+      "SCHRITT 2 — Für 'medium'/'large'-Quellen aufrufen, bevor RAGSource_get verwendet wird. " +
       "Liefert das Inhaltsverzeichnis mit allen §§/Artikeln und Kurztiteln, " +
-      "z.B. '§ 6 Aufgaben (Pflichtaufgaben, Mindeststaerke)'. " +
-      "Bis zu 8 Quellen gleichzeitig abfragen (Batch). " +
-      "Die section_ref-Werte aus dem TOC exakt so an RAGSource_get uebergeben. " +
-      "Falls toc=null: Tool liefert bei small/medium-Quellen automatisch alle §§ im Feld 'sections'.",
+      "z.B. '§ 6 Aufgaben (Pflichtaufgaben, Mindeststärke)'. " +
+      "Bis zu 8 Quellen gleichzeitig (Batch). " +
+      "section_ref-Werte aus dem TOC exakt an RAGSource_get übergeben. " +
+      "Kein TOC vorhanden: liefert bei small/medium alle §§ direkt im Feld 'sections'.",
       {
         sources: z
           .array(z.string())
@@ -539,12 +533,11 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     this.server.tool(
       "RAGSource_get",
-      "SCHRITT 3 — Laedt den Originalwortlaut von Paragraphen aus einer oder mehreren Rechtsquellen. " +
-      "section_ref exakt wie im TOC angegeben verwenden, z.B. '§ 2', 'Artikel 6', 'Prod. Nr. 41.40.08'. " +
+      "SCHRITT 3 — Lädt den Originalwortlaut von Paragraphen aus einer oder mehreren Rechtsquellen. " +
+      "section_ref exakt wie im TOC, z.B. '§ 2', 'Artikel 6', 'Prod. Nr. 41.40.08'. " +
       "Max. 8 Quellen pro Aufruf; max. 25 §§ je Quelle; max. 50 §§ gesamt. " +
-      "Fuer 'small'-Quellen: sections weglassen → liefert das komplette Dokument. " +
-      "Fuer 'medium'/'large': zuerst RAGSource_toc, dann gezielte §§ angeben. " +
-      "Liefert 'quelle_url' fuer Markdown-Links in der Antwort.",
+      "small-Quellen: sections weglassen → liefert das komplette Dokument. " +
+      "Liefert 'quelle_url' für Markdown-Links in der Antwort.",
       {
         sources: z
           .array(
@@ -713,14 +706,13 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     this.server.tool(
       "RAGSource_query",
-      "FALLBACK — nur verwenden wenn RAGSource_catalog keinen Treffer liefert oder die Quelle unklar ist. " +
-      "FTS5-Volltextsuche ueber alle indizierten Paragraphen. " +
-      "Liefert relevante Abschnitte mit Source-ID und section_ref als Kontext. " +
-      "Der Normalweg ist immer: RAGSource_catalog → RAGSource_toc → RAGSource_get.",
+      "FALLBACK — nur wenn RAGSource_catalog keine passende Quelle liefert oder das Thema unklar ist. " +
+      "FTS5-Volltextsuche über alle indizierten Paragraphen. " +
+      "Liefert Treffer mit source_id und section_ref für gezieltes Nachladen per RAGSource_get.",
       {
         query: z
           .string()
-          .describe("Suchanfrage in natuerlicher Sprache"),
+          .describe("Suchanfrage in natürlicher Sprache"),
         geo: z
           .string()
           .optional()
