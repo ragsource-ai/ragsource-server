@@ -580,11 +580,19 @@ if (!isIncremental) {
   }
   if (existsSync(schemaOutFile)) unlinkSync(schemaOutFile);
 
-  // Remote D1 benötigt auch nach CREATE etwas Zeit für DO-Replikation,
-  // bevor die ersten INSERTs ankommen. Ohne Pause → UNIQUE constraint (alte Daten sichtbar).
+  // Remote D1: Nach CREATE noch sichtbare Altdaten (DO-Replikation) → UNIQUE constraint.
+  // Polling bis sources leer (max. 40s), robuster als hardcodiertes sleep.
   if (isRemote) {
-    console.log("  ⏳ Warte 10s auf D1 DO-Replikation nach CREATE...");
-    execSync("sleep 10");
+    console.log("  ⏳ Warte auf D1 DO-Replikation (sources muss leer sein)...");
+    const deadline = Date.now() + 40_000;
+    while (Date.now() < deadline) {
+      const rows = await queryD1Remote("SELECT COUNT(*) as cnt FROM sources");
+      const cnt = (rows[0]?.cnt as number) ?? -1;
+      if (cnt === 0) break;
+      process.stdout.write(`\r  ⏳ sources: noch ${cnt} Zeilen, warte 3s...  `);
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+    process.stdout.write("\r  D1 DO-Replikation abgeschlossen ✅              \n");
   }
 }
 
