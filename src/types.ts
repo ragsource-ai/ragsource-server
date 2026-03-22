@@ -70,10 +70,8 @@ export interface SourceToc {
 export interface CatalogEntry {
   id: string;
   titel: string;
-  typ: string | null;
   ebene: string | null;
-  rechtsrang: number | null;        // 1=Bundesrecht … 6=Tarifrecht
-  rechtsrang_label: string | null;  // "Bundesrecht", "Landesrecht BW", …
+  rechtsrang: number | null;        // 0=EU … 6=Tarifrecht
   size_class: string;
   toc_available: boolean;       // true wenn TOC in source_tocs vorhanden
   beschreibung: string | null;  // Kurzbeschreibung der Quelle

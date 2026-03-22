@@ -373,7 +373,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
 
         // Quellen abfragen — alle Felder, die das LLM braucht
         const sql = `
-          SELECT s.id, s.titel, s.typ, s.ebene, s.rechtsrang, s.rechtsrang_label, s.size_class, s.beschreibung,
+          SELECT s.id, s.titel, s.ebene, s.rechtsrang, s.size_class, s.beschreibung,
                  EXISTS(SELECT 1 FROM source_tocs t WHERE t.source_id = s.id) AS toc_available
           FROM sources s
           WHERE ${geoFilter.sql}
@@ -384,10 +384,8 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         type CatalogRow = {
           id: string;
           titel: string;
-          typ: string | null;
           ebene: string | null;
           rechtsrang: number | null;
-          rechtsrang_label: string | null;
           size_class: string;
           beschreibung: string | null;
           toc_available: 0 | 1;
@@ -404,10 +402,8 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         const catalog: CatalogEntry[] = sorted.map((s) => ({
           id: s.id,
           titel: s.titel,
-          typ: s.typ,
           ebene: s.ebene,
           rechtsrang: s.rechtsrang,
-          rechtsrang_label: s.rechtsrang_label,
           size_class: s.size_class,
           toc_available: s.toc_available === 1,
           beschreibung: s.beschreibung,
