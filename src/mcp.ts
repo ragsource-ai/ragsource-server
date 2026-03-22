@@ -233,7 +233,10 @@ function buildAmbiguousResponse(
   systemMessage: string | null,
 ): { content: Array<{ type: "text"; text: string }> } {
   const list = ambiguous.candidates
-    .map((c) => `• ${c.name} (${c.kreis}, ${c.land}) — ARS: ${c.ars}`)
+    .map((c) => {
+      const kreisLabel = c.kreis || `Lkr-ARS ${c.kreis_ars}`;
+      return `• ${c.name} — ${kreisLabel}, ${c.land} — ARS: ${c.ars}`;
+    })
     .join("\n");
 
   const payload = {

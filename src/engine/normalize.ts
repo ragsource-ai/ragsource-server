@@ -25,7 +25,7 @@ export interface ResolvedGeo {
 export interface AmbiguousGeo {
   ambiguous: true;
   input: string;
-  candidates: Array<{ name: string; kreis: string; land: string; ars: string }>;
+  candidates: Array<{ name: string; kreis: string; kreis_ars: string; land: string; land_ars: string; ars: string }>;
 }
 
 /**
@@ -75,8 +75,8 @@ export async function resolveGeo(
 
   // Kein Alias-Treffer → gemeinden.name exakter Lookup (case-insensitive)
   // Beide Varianten probieren: Originalschreibung + normalisiert (Umlaut-Fallback)
-  type GemeindeRow = { ars: string; name: string; kreis: string; land: string };
-  const nameQuery = "SELECT ars, name, kreis, land FROM gemeinden WHERE LOWER(name) = ? LIMIT 20";
+  type GemeindeRow = { ars: string; name: string; kreis: string; land: string; land_ars: string };
+  const nameQuery = "SELECT ars, name, kreis, land, land_ars FROM gemeinden WHERE LOWER(name) = ? LIMIT 20";
 
   let rows: GemeindeRow[] = [];
   const r1 = await db.prepare(nameQuery).bind(lower).all<GemeindeRow>();
@@ -95,7 +95,14 @@ export async function resolveGeo(
     return {
       ambiguous: true,
       input: trimmed,
-      candidates: rows.map((r) => ({ name: r.name, kreis: r.kreis, land: r.land, ars: r.ars })),
+      candidates: rows.map((r) => ({
+        name: r.name,
+        kreis: r.kreis,
+        kreis_ars: r.ars.slice(0, 5),
+        land: r.land,
+        land_ars: r.land_ars,
+        ars: r.ars,
+      })),
     };
   }
 
