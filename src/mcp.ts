@@ -360,9 +360,12 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         const geo = geoResult as ResolvedGeo | null;
         // Geo wurde angegeben aber konnte nicht aufgelöst werden (kein Alias, kein Gemeindename)
         const geoUnresolved = effectiveGeo !== null && geo === null;
-        const geoFilter = geoUnresolved
-          ? { sql: "s.rechtsrang <= 2", params: [] as unknown[] }  // EU + Bund + Land BW
-          : buildGeoFilter(geo);
+        // Fallback: Land BW (ARS "08") — EU + Bund + Land über denselben ARS-Filter wie der Normalfall
+        const GEO_LAND_BW: ResolvedGeo = {
+          level: "land", land_ars: "08", kreis_ars: null, verband_ars: null, gemeinde_ars: null,
+          display: { name: "Baden-Württemberg", verband: null, kreis: null, land: "Baden-Württemberg" },
+        };
+        const geoFilter = buildGeoFilter(geoUnresolved ? GEO_LAND_BW : geo);
         const projektFilter = buildProjektFilter(resolveProjekt(projektInput));
 
         // Quellen abfragen — alle Felder, die das LLM braucht
