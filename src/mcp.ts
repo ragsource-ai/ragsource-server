@@ -300,7 +300,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           .optional()
           .describe(
             "Mandanten-Filter. Wird automatisch aus dem Host-Header erkannt — " +
-            "nur setzen wenn explizit ein anderes Projekt benoetigt wird.",
+            "nur setzen wenn explizit ein anderes Projekt benötigt wird.",
           ),
       },
       { title: "RAGSource catalog", readOnlyHint: true, destructiveHint: false },
