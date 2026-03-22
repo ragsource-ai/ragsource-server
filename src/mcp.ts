@@ -430,7 +430,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           .string()
           .optional()
           .describe(
-            "TOC-Ebene fuer mehrteilige Werke, z.B. 'buch-2' fuer BGB Buch 2. " +
+            "TOC-Ebene für mehrteilige Werke, z.B. 'buch-2' für BGB Buch 2. " +
             "Ohne Angabe: 'gesamt'.",
           ),
         geo: z
@@ -551,7 +551,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
                 .optional()
                 .describe(
                   "Paragraphen-Referenzen, z.B. ['§ 2', '§ 8', 'Artikel 24']. " +
-                  "Leer lassen fuer gesamtes Dokument (nur fuer small-Quellen empfohlen).",
+                  "Leer lassen für gesamtes Dokument (nur für small-Quellen empfohlen).",
                 ),
             }),
           )
