@@ -682,7 +682,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
 
               const normalized = normalizeSectionRef(rawRef);
 
-              // Exakter Match zuerst
+              // 1. Exakter Match (voller Titel)
               let row = await db
                 .prepare(
                   "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? AND section_ref = ? LIMIT 1",
@@ -690,10 +690,24 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
                 .bind(req.source, normalized)
                 .first<{ section_ref: string; heading: string | null; body: string }>();
 
-              // Fallback: LIKE-Suche (z.B. "§2" statt "§ 2")
-              // % und _ escapen, damit sie nicht als LIKE-Wildcards interpretiert werden
+              // 2. Kurzreferenz extrahieren (z.B. "§ 19 EStG [red. ...]" → "§ 19")
+              //    LLMs senden oft den vollen TOC-Eintrag, DB hat nur "§ N" als section_ref
               if (!row) {
-                const escapedForLike = normalized.replace(/[%_\\]/g, "\\$&");
+                const shortRef = extractSectionRef(normalized);
+                if (shortRef && shortRef !== normalized) {
+                  row = await db
+                    .prepare(
+                      "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? AND section_ref = ? LIMIT 1",
+                    )
+                    .bind(req.source, shortRef)
+                    .first<{ section_ref: string; heading: string | null; body: string }>();
+                }
+              }
+
+              // 3. Fallback: LIKE-Suche (z.B. "§2" statt "§ 2")
+              //    % _ \ [ ] escapen, damit sie nicht als Pattern-Zeichen interpretiert werden
+              if (!row) {
+                const escapedForLike = normalized.replace(/[%_\\[\]]/g, "\\$&");
                 row = await db
                   .prepare(
                     "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? AND section_ref LIKE ? ESCAPE '\\' LIMIT 1",
@@ -899,4 +913,17 @@ function normalizeSectionRef(ref: string): string {
     .replace(/Artikel\s+(\d)/g, "Artikel $1")
     .replace(/Erwägungsgrund\s+(\d)/g, "Erwägungsgrund $1")
     .replace(/EG\s+(\d)/g, "EG $1");
+}
+
+/**
+ * Extrahiert die Kurzreferenz (§ N, Art. N, EG N, Kapitel N) aus einem vollen TOC-Eintrag.
+ * Beispiel: "§ 19 EStG [red. Nichtselbständige Arbeit – ...]" → "§ 19"
+ *           "Art. 6 Rechtmäßigkeit" → "Art. 6"
+ * Gibt null zurück wenn keine Referenz erkannt wird.
+ */
+function extractSectionRef(ref: string): string | null {
+  const m = ref.match(
+    /^(§\s*\d+[a-z]?|Art\.\s*\d+[a-z]?|Artikel\s+\d+[a-z]?|Erwägungsgrund\s+\d+|EG\s+\d+|Kapitel\s+\d+[a-z]?)\b/i,
+  );
+  return m ? normalizeSectionRef(m[1]) : null;
 }
