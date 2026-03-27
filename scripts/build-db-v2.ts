@@ -139,10 +139,18 @@ function execWithRetry(cmd: string, opts: Parameters<typeof execSync>[1], retrie
 
 /**
  * Sendet einen Batch von SQL-Statements direkt an die D1 REST API (nur --remote).
- * Verwendet parameterized Queries: Bind-Parameter zählen nicht zum Statement-Size-Limit,
- * wodurch auch große Inhalte (>100 KB) problemlos eingefügt werden können.
+ *
+ * Hybrid-Strategie:
+ *   - Kleine Statements (alle Params < 50 KB): zusammen als ein konkatenierter SQL-String
+ *     (wie bisher, effizient bei vielen kleinen INSERTs).
+ *   - Große Statements (ein Param ≥ 50 KB): einzeln mit Bind-Parametern senden.
+ *     Bind-Parameter zählen nicht zum SQLITE_MAX_SQL_LENGTH, wodurch auch große
+ *     Inhalte (>100 KB, z.B. § 52 EStG) eingefügt werden können.
+ *
  * Gibt bis zu 3 Versuche bei Fehlern.
  */
+const PARAM_SIZE_THRESHOLD = 50_000; // Zeichen — ab dieser Größe einzeln senden
+
 async function fetchD1Batch(statements: SqlStmt[]): Promise<void> {
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
   const apiToken = process.env.CLOUDFLARE_API_TOKEN;
@@ -151,28 +159,50 @@ async function fetchD1Batch(statements: SqlStmt[]): Promise<void> {
       "Für --remote werden CLOUDFLARE_ACCOUNT_ID und CLOUDFLARE_API_TOKEN als Env-Variablen benötigt.",
     );
   }
-  // D1 REST API: Array von {sql, params} Objekten (Batch-Ausführung)
-  const body = statements.map((s) => ({
-    sql: s.sql.trimEnd().replace(/;$/, ""),
-    params: s.params,
-  }));
   const url = `${CF_API_BASE}/accounts/${accountId}/d1/database/${D1_DB_ID}/query`;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = (await res.json()) as { success: boolean; errors: { message: string }[] };
-      if (!res.ok || !data.success) {
-        throw new Error(`D1 API HTTP ${res.status}: ${JSON.stringify(data.errors ?? data)}`);
-      }
-      return;
-    } catch (e) {
-      if (attempt === 3) throw e;
-      await new Promise((r) => setTimeout(r, 2000));
+
+  // Statements aufteilen: klein (konkatenierbar) vs. groß (einzeln mit Params)
+  const small: SqlStmt[] = [];
+  const large: SqlStmt[] = [];
+  for (const s of statements) {
+    const maxParamLen = Math.max(0, ...s.params.map((p) => String(p ?? "").length));
+    if (maxParamLen >= PARAM_SIZE_THRESHOLD) {
+      large.push(s);
+    } else {
+      small.push(s);
     }
+  }
+
+  /** Sendet ein {sql, params}-Objekt an die D1 REST API mit Retry. */
+  async function sendOne(body: { sql: string; params: unknown[] }): Promise<void> {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = (await res.json()) as { success: boolean; errors: { message: string }[] };
+        if (!res.ok || !data.success) {
+          throw new Error(`D1 API HTTP ${res.status}: ${JSON.stringify(data.errors ?? data)}`);
+        }
+        return;
+      } catch (e) {
+        if (attempt === 3) throw e;
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    }
+  }
+
+  // 1. Kleine Statements gebatcht (konkatenierter SQL-String, keine Params)
+  if (small.length > 0) {
+    const sql = small.map((s) => stmtToInlineSql(s).trimEnd().replace(/;$/, "")).join(";\n") + ";";
+    await sendOne({ sql, params: [] });
+  }
+
+  // 2. Große Statements einzeln mit Bind-Parametern
+  for (const s of large) {
+    await sendOne({ sql: s.sql.trimEnd().replace(/;$/, ""), params: s.params });
   }
 }
 
