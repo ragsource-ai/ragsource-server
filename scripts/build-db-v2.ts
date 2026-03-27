@@ -38,6 +38,22 @@ import { execSync } from "child_process";
 import { esc, buildConcatTree } from "./sql-utils.js";
 
 // -----------------------------------------------------------------------
+// Parameterized Statement Type (für D1 REST API ohne Statement-Size-Limit)
+// -----------------------------------------------------------------------
+
+interface SqlStmt {
+  sql: string;
+  params: unknown[];
+}
+
+/** Konvertiert ein parameterized Statement in Inline-SQL (für --local File-Execution). */
+function stmtToInlineSql(stmt: SqlStmt): string {
+  if (stmt.params.length === 0) return stmt.sql;
+  let idx = 0;
+  return stmt.sql.replace(/\?/g, () => esc(stmt.params[idx++]));
+}
+
+// -----------------------------------------------------------------------
 // Konfiguration
 // -----------------------------------------------------------------------
 
@@ -123,10 +139,11 @@ function execWithRetry(cmd: string, opts: Parameters<typeof execSync>[1], retrie
 
 /**
  * Sendet einen Batch von SQL-Statements direkt an die D1 REST API (nur --remote).
- * Eliminiert den wrangler-CLI-Spawn-Overhead (~2 s pro Batch).
+ * Verwendet parameterized Queries: Bind-Parameter zählen nicht zum Statement-Size-Limit,
+ * wodurch auch große Inhalte (>100 KB) problemlos eingefügt werden können.
  * Gibt bis zu 3 Versuche bei Fehlern.
  */
-async function fetchD1Batch(statements: string[]): Promise<void> {
+async function fetchD1Batch(statements: SqlStmt[]): Promise<void> {
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
   const apiToken = process.env.CLOUDFLARE_API_TOKEN;
   if (!accountId || !apiToken) {
@@ -134,9 +151,11 @@ async function fetchD1Batch(statements: string[]): Promise<void> {
       "Für --remote werden CLOUDFLARE_ACCOUNT_ID und CLOUDFLARE_API_TOKEN als Env-Variablen benötigt.",
     );
   }
-  // D1 /query-API: alle Statements als ein SQL-String (SQLite exec unterstützt mehrere Statements)
-  const sql = statements.map((s) => s.trimEnd().replace(/;$/, "")).join(";\n") + ";";
-  const body = { sql, params: [] as never[] };
+  // D1 REST API: Array von {sql, params} Objekten (Batch-Ausführung)
+  const body = statements.map((s) => ({
+    sql: s.sql.trimEnd().replace(/;$/, ""),
+    params: s.params,
+  }));
   const url = `${CF_API_BASE}/accounts/${accountId}/d1/database/${D1_DB_ID}/query`;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -161,7 +180,7 @@ async function fetchD1Batch(statements: string[]): Promise<void> {
  * Führt mehrere Statement-Batches mit max. `concurrency` parallelen API-Anfragen aus.
  * Reihenfolge der Batches untereinander ist nicht garantiert — nur für unabhängige INSERTs nutzen.
  */
-async function executeBatchesConcurrent(batches: string[][], concurrency: number): Promise<void> {
+async function executeBatchesConcurrent(batches: SqlStmt[][], concurrency: number): Promise<void> {
   let completed = 0;
   const total = batches.length;
   for (let i = 0; i < batches.length; i += concurrency) {
@@ -576,13 +595,15 @@ if (!isIncremental) {
         .split("\n")
         .filter((l) => l.startsWith("INSERT"));
 
-      const gemeindenBatches: string[][] = [];
+      const gemeindenBatchesRaw: string[][] = [];
       for (let i = 0; i < gemeindenStatements.length; i += BATCH_SIZE) {
-        gemeindenBatches.push(gemeindenStatements.slice(i, i + BATCH_SIZE));
+        gemeindenBatchesRaw.push(gemeindenStatements.slice(i, i + BATCH_SIZE));
       }
 
-      console.log(`\n🏘️  Gemeinden-Seed (${gemeindenStatements.length} Einträge, ${gemeindenBatches.length} Batches)...`);
+      console.log(`\n🏘️  Gemeinden-Seed (${gemeindenStatements.length} Einträge, ${gemeindenBatchesRaw.length} Batches)...`);
       if (isRemote) {
+        // Raw SQL-Strings → SqlStmt[] für die API
+        const gemeindenBatches = gemeindenBatchesRaw.map((b) => b.map((s) => ({ sql: s, params: [] as unknown[] })));
         try {
           await executeBatchesConcurrent(gemeindenBatches, API_CONCURRENCY);
         } catch (e) {
@@ -592,9 +613,9 @@ if (!isIncremental) {
       } else {
         const gemeindenFile = join(schemaDir, ".build-gemeinden-v2.sql");
         let gBatchNum = 0;
-        for (const batch of gemeindenBatches) {
+        for (const batch of gemeindenBatchesRaw) {
           gBatchNum++;
-          process.stdout.write(`  Batch ${gBatchNum}/${gemeindenBatches.length}... `);
+          process.stdout.write(`  Batch ${gBatchNum}/${gemeindenBatchesRaw.length}... `);
           writeFileSync(gemeindenFile, batch.join("\n"), "utf-8");
           try {
             execWithRetry(
@@ -634,7 +655,7 @@ if (isIncremental) {
   const migrateSQL = "ALTER TABLE sources ADD COLUMN content_hash TEXT;";
   if (isRemote) {
     try {
-      await fetchD1Batch([migrateSQL]);
+      await fetchD1Batch([{ sql: migrateSQL, params: [] }]);
       console.log("  content_hash-Spalte angelegt ✅");
     } catch {
       console.log("  content_hash-Spalte bereits vorhanden.");
@@ -672,8 +693,8 @@ if (isIncremental) {
 // -----------------------------------------------------------------------
 
 // Artikel-Gruppen: Pro Quelldatei ein Array von Statements (nie über Dateigrenzen batchen)
-const articleGroups: string[][] = [];
-const tailStatements: string[] = [];
+const articleGroups: SqlStmt[][] = [];
+const tailStatements: SqlStmt[] = [];
 
 let imported = 0;
 let skipped = 0;
@@ -778,32 +799,36 @@ for (const { file, root } of mdFilesWithRoot) {
   );
 
   // --- SQL-Gruppe für diese Quelle ---
-  const group: string[] = [];
+  const group: SqlStmt[] = [];
 
   // 1. sources-Eintrag (inkl. content_hash für spätere inkrementelle Updates)
-  group.push(
-    `INSERT INTO sources (id, titel, kurzbezeichnung, typ, ebene, land_ars, kreis_ars, verband_ars, gemeinde_ars, section_count, total_tokens, size_class, gueltig_ab, quelle, dateipfad, url, beschreibung, stand, rechtsrang, rechtsrang_label, content_hash) VALUES (` +
-    `${esc(sourceId)}, ${esc(fm.titel)}, ${esc(fm.kurzbezeichnung || null)}, ${esc(fm.typ || null)}, ${esc(ebene)}, ` +
-    `${esc(land_ars)}, ${esc(kreis_ars)}, ${esc(verband_ars)}, ${esc(gemeinde_ars)}, ` +
-    `${sections.length}, ${totalTokens}, ${esc(sizeClass)}, ` +
-    `${esc(fm.gueltig_ab || null)}, ${esc(fm.quelle || null)}, ${esc(dateipfad)}, ` +
-    `${esc(fm.url || null)}, ${esc(fm.beschreibung || null)}, ${esc(fm.stand || null)}, ` +
-    `${rechtsrang ?? "NULL"}, ${esc(rechtsrang_label)}, ${esc(fileHash)});`,
-  );
+  group.push({
+    sql: `INSERT INTO sources (id, titel, kurzbezeichnung, typ, ebene, land_ars, kreis_ars, verband_ars, gemeinde_ars, section_count, total_tokens, size_class, gueltig_ab, quelle, dateipfad, url, beschreibung, stand, rechtsrang, rechtsrang_label, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+    params: [
+      sourceId, fm.titel, fm.kurzbezeichnung || null, fm.typ || null, ebene,
+      land_ars, kreis_ars, verband_ars, gemeinde_ars,
+      sections.length, totalTokens, sizeClass,
+      fm.gueltig_ab || null, fm.quelle || null, dateipfad,
+      fm.url || null, fm.beschreibung || null, fm.stand || null,
+      rechtsrang ?? null, rechtsrang_label, fileHash,
+    ],
+  });
 
   // 2. source_projekte
   for (const p of projekte) {
-    group.push(
-      `INSERT INTO source_projekte (source_id, projekt) VALUES (${esc(sourceId)}, ${esc(p)});`,
-    );
+    group.push({
+      sql: `INSERT INTO source_projekte (source_id, projekt) VALUES (?, ?);`,
+      params: [sourceId, p],
+    });
   }
 
   // 3. source_tocs (nur wenn TOC vorhanden)
   if (toc) {
     const tocId = `${sourceId}_toc`;
-    group.push(
-      `INSERT INTO source_tocs (id, source_id, toc_level, content) VALUES (${esc(tocId)}, ${esc(sourceId)}, 'gesamt', ${esc(toc)});`,
-    );
+    group.push({
+      sql: `INSERT INTO source_tocs (id, source_id, toc_level, content) VALUES (?, ?, 'gesamt', ?);`,
+      params: [tocId, sourceId, toc],
+    });
   }
 
   // 4. source_sections
@@ -818,11 +843,10 @@ for (const { file, root } of mdFilesWithRoot) {
     }
     sectionIds.add(sectionId);
 
-    group.push(
-      `INSERT INTO source_sections (id, source_id, section_ref, heading, body, section_type, sort_order) VALUES (` +
-      `${esc(sectionId)}, ${esc(sourceId)}, ${esc(section.sectionRef)}, ${esc(section.heading || null)}, ` +
-      `${esc(section.body)}, ${esc(section.sectionType)}, ${section.sortOrder});`,
-    );
+    group.push({
+      sql: `INSERT INTO source_sections (id, source_id, section_ref, heading, body, section_type, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?);`,
+      params: [sectionId, sourceId, section.sectionRef, section.heading || null, section.body, section.sectionType, section.sortOrder],
+    });
 
     sectionTotal++;
   }
@@ -834,7 +858,7 @@ for (const { file, root } of mdFilesWithRoot) {
 }
 
 // FTS5-Rebuild am Ende (muss nach allen Inserts kommen)
-tailStatements.push("INSERT INTO sections_fts(sections_fts) VALUES('rebuild');");
+tailStatements.push({ sql: "INSERT INTO sections_fts(sections_fts) VALUES('rebuild');", params: [] });
 
 // Gelöschte Quellen identifizieren (im DB vorhanden, aber keine Datei mehr)
 let deletedCount = 0;
@@ -868,8 +892,8 @@ if (isIncremental) {
 // Batching (Artikelgrenzen respektieren, wie v1)
 // -----------------------------------------------------------------------
 
-const batches: string[][] = [];
-let currentBatch: string[] = [];
+const batches: SqlStmt[][] = [];
+let currentBatch: SqlStmt[] = [];
 
 for (const group of articleGroups) {
   if (currentBatch.length > 0 && currentBatch.length + group.length > BATCH_SIZE) {
@@ -893,7 +917,7 @@ if (isIncremental) {
 
   // 1. DELETE (sequentiell, vor den INSERTs — CASCADE entfernt Sections + TOCs automatisch)
   if (deleteIds.length > 0) {
-    const deleteStatements = deleteIds.map((id) => `DELETE FROM sources WHERE id = ${esc(id)};`);
+    const deleteStatements: SqlStmt[] = deleteIds.map((id) => ({ sql: `DELETE FROM sources WHERE id = ?;`, params: [id] }));
     console.log(`\n🗑️  Lösche ${deleteIds.length} Quelle(n) (${mode})...`);
     if (isRemote) {
       try {
@@ -905,7 +929,7 @@ if (isIncremental) {
       }
     } else {
       const delFile = join(schemaDir, ".build-delete-v2.sql");
-      writeFileSync(delFile, deleteStatements.join("\n"), "utf-8");
+      writeFileSync(delFile, deleteStatements.map(stmtToInlineSql).join("\n"), "utf-8");
       try {
         execWithRetry(
           `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-delete-v2.sql`,
@@ -937,7 +961,7 @@ if (isIncremental) {
       for (const batch of batches) {
         batchNum++;
         process.stdout.write(`  Batch ${batchNum}/${batches.length}... `);
-        writeFileSync(sqlFile, batch.join("\n"), "utf-8");
+        writeFileSync(sqlFile, batch.map(stmtToInlineSql).join("\n"), "utf-8");
         try {
           execWithRetry(
             `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-seed-v2.sql`,
@@ -969,7 +993,7 @@ if (isIncremental) {
     }
   } else {
     const ftsFile = join(schemaDir, ".build-fts-v2.sql");
-    writeFileSync(ftsFile, tailStatements.join("\n"), "utf-8");
+    writeFileSync(ftsFile, tailStatements.map(stmtToInlineSql).join("\n"), "utf-8");
     try {
       execWithRetry(
         `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-fts-v2.sql`,
@@ -1007,7 +1031,7 @@ if (isIncremental) {
     for (const batch of [...batches, tailStatements]) {
       batchNum++;
       process.stdout.write(`  Batch ${batchNum}/${batches.length + 1}... `);
-      writeFileSync(sqlFile, batch.join("\n"), "utf-8");
+      writeFileSync(sqlFile, batch.map(stmtToInlineSql).join("\n"), "utf-8");
       try {
         execWithRetry(
           `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-seed-v2.sql`,
