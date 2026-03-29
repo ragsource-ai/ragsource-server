@@ -316,10 +316,9 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
       "RAGSource_catalog",
       "SCHRITT 1 — Pflichtaufruf zu Beginn jeder Anfrage. " +
       "Liefert alle verfügbaren Rechtsquellen für eine Gemeinde/Region (EU- bis Ortsrecht). " +
-      "Jeder Eintrag: id, titel, typ, ebene, rechtsrang, rechtsrang_label, size_class, toc_available, beschreibung. " +
-      "size_class steuert den Folgeschritt: " +
-      "'small' → RAGSource_get direkt (kein TOC nötig); " +
-      "'medium'/'large' → RAGSource_toc aufrufen, dann gezielte §§ per RAGSource_get laden. " +
+      "Kompaktformat: 'schema' definiert die Felder, 'sources' ist ein Array von Arrays. " +
+      "Feld 'size' (S/M/L) steuert den Folgeschritt: " +
+      "S → RAGSource_get direkt; M/L → RAGSource_toc, dann gezielte §§ per RAGSource_get. " +
       "Gibt optional 'system_message' zurück — dieses immer zuerst ausgeben.",
       {
         geo: z
@@ -398,16 +397,16 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         const sources = result.results ?? [];
         const sorted = sortByEbene(sources);
 
-        // Catalog-Einträge (ohne body-Inhalte)
-        const catalog: CatalogEntry[] = sorted.map((s) => ({
-          id: s.id,
-          titel: s.titel,
-          ebene: s.ebene,
-          rechtsrang: s.rechtsrang,
-          size_class: s.size_class,
-          toc_available: s.toc_available === 1,
-          beschreibung: s.beschreibung,
-        }));
+        // Catalog-Einträge als kompakte Arrays: [id, titel, rang, size, toc, hint]
+        const sizeMap: Record<string, string> = { small: "S", medium: "M", large: "L" };
+        const catalog: CatalogEntry[] = sorted.map((s) => [
+          s.id,
+          s.titel,
+          s.rechtsrang,
+          sizeMap[s.size_class] ?? "M",
+          s.toc_available === 1,
+          s.beschreibung || null,
+        ]);
 
         const geoInfo = geo
           ? {
@@ -424,7 +423,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         // b) Gemeinde-Ebene aufgelöst, aber keine Gemeinde-Quellen vorhanden
         const notConfigured =
           geoUnresolved ||
-          (geo?.level === "gemeinde" && !catalog.some((s) => s.ebene === "gemeinde"));
+          (geo?.level === "gemeinde" && !catalog.some((s) => s[2] === 5)); // rang 5 = Gemeinde
         const notConfiguredHinweis = notConfigured
           ? (notConfiguredMessage ??
               `Hinweis an den Assistenten: Die Gemeinde "${effectiveGeo ?? geoInfo.name}" ist noch nicht als eigenständige Rechtsquelle hinterlegt. ` +
@@ -436,19 +435,16 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           content: [
             {
               type: "text" as const,
-              text: JSON.stringify(
-                {
-                  ...(systemMessage && { system_message: systemMessage }),
-                  geo: geoInfo,
-                  total: catalog.length,
-                  ...(notConfigured && { not_configured: true, hinweis: notConfiguredHinweis }),
-                  routing_hinweis:
-                    "small → RAGSource_get direkt | medium/large → RAGSource_toc (toc_available=true: TOC; toc_available=false: alle §§ als Fallback)",
-                  sources: catalog,
-                },
-                null,
-                2,
-              ),
+              text: JSON.stringify({
+                ...(systemMessage && { system_message: systemMessage }),
+                geo: geoInfo,
+                total: catalog.length,
+                ...(notConfigured && { not_configured: true, hinweis: notConfiguredHinweis }),
+                schema: ["id", "titel", "rang", "size", "toc", "hint"],
+                rang_legende: { 0: "EU", 1: "Bund", 2: "Land", 3: "Kreis", 4: "Verband", 5: "Gemeinde", 6: "Tarifrecht" },
+                size_legende: { S: "get direkt", M: "toc empfohlen", L: "toc erforderlich" },
+                sources: catalog,
+              }),
             },
           ],
         };
