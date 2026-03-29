@@ -700,21 +700,17 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
                 }
               }
 
-              // 3. Fallback: LIKE-Suche (z.B. "2.1" findet "2.1 Sachlicher Anwendungsbereich")
-              //    Nur für kurze Refs (≤3 Wörter), weil D1/SQLite bei langen Unicode-Strings
-              //    (Umlaute, §, –) auch mit nur 2 Wildcards "LIKE pattern too complex" wirft.
+              // 3. Fallback: INSTR-Suche (z.B. "2.1" findet "2.1 Sachlicher Anwendungsbereich")
+              //    INSTR statt LIKE: semantisch identisch (Substring-Check), aber ohne den
+              //    rekursiven Pattern-Matching-Algorithmus von LIKE → kein D1-Komplexitätslimit
+              //    bei langen Unicode-Strings (Umlaute, §, –).
               if (!row) {
-                const escapedForLike = normalized.replace(/[%_\\[\]]/g, "\\$&");
-                const words = escapedForLike.trim().split(/\s+/);
-                if (words.length <= 3) {
-                  const likePattern = `%${words.join("%")}%`;
-                  row = await db
-                    .prepare(
-                      "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? AND section_ref LIKE ? ESCAPE '\\' LIMIT 1",
-                    )
-                    .bind(req.source, likePattern)
-                    .first<{ section_ref: string; heading: string | null; body: string }>();
-                }
+                row = await db
+                  .prepare(
+                    "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? AND INSTR(section_ref, ?) > 0 LIMIT 1",
+                  )
+                  .bind(req.source, normalized)
+                  .first<{ section_ref: string; heading: string | null; body: string }>();
               }
 
               if (row) {
