@@ -702,13 +702,18 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
 
               // 3. Fallback: LIKE-Suche (z.B. "§2" statt "§ 2")
               //    % _ \ [ ] escapen, damit sie nicht als Pattern-Zeichen interpretiert werden
+              //    Whitespace → % nur für kurze Refs (≤3 Wörter), sonst SQLITE_ERROR: LIKE pattern too complex
               if (!row) {
                 const escapedForLike = normalized.replace(/[%_\\[\]]/g, "\\$&");
+                const words = escapedForLike.trim().split(/\s+/);
+                const likePattern = words.length <= 3
+                  ? `%${words.join("%")}%`
+                  : `%${escapedForLike}%`;
                 row = await db
                   .prepare(
                     "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? AND section_ref LIKE ? ESCAPE '\\' LIMIT 1",
                   )
-                  .bind(req.source, `%${escapedForLike.replace(/\s+/g, "%")}%`)
+                  .bind(req.source, likePattern)
                   .first<{ section_ref: string; heading: string | null; body: string }>();
               }
 
