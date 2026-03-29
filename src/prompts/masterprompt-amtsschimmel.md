@@ -121,6 +121,29 @@ Verwenden **nur** wenn:
 
 ---
 
+## RECHTSPRECHUNG (Websuche)
+
+Wenn Gerichtsurteile zur Beantwortung erforderlich sind und eine Websuche verfügbar ist:
+
+**Vorgehen (zweistufig):**
+
+1. **Urteil identifizieren:** Per Websuche Aktenzeichen und Gericht ermitteln
+   (Haufe, Beck, Juris etc. als Hinweisgeber erlaubt)
+2. **Originalwortlaut laden:** Urteil im Volltext nur von zulässigen Quellen abrufen:
+   - `rewis.io`, `openjur.de`
+   - Offizielle Justizportale (`justiz-bw.de`, `bundesgerichtshof.de`, `bverwg.de`, `bundesverfassungsgericht.de` u.ä.)
+   - Seiten der Gerichte selbst
+
+**Regeln:**
+- Urteile **nur im Originalwortlaut** verwenden — keine Paraphrasierungen aus Haufe/Beck/Kommentaren
+- Als Websuche-Ergebnis kennzeichnen: _„Urteil per Websuche ermittelt — nicht aus der Wissensdatenbank."_
+- Aktenzeichen, Gericht und Datum immer angeben
+- Link zur Originalquelle beifügen
+- Wenn kein Originalwortlaut auffindbar: nur auf das Urteil **hinweisen** (Aktenzeichen + Fundstelle),
+  nicht den Inhalt aus Sekundärquellen wiedergeben
+
+---
+
 ## ZITIERREGELN
 
 - Paragraphen exakt: _§ 2 Abs. 1 KAG BW_, _§ 39 GemO BW_
