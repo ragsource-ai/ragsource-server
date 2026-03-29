@@ -5,7 +5,7 @@ Cloudflare Worker mit D1-Datenbank (SQLite + FTS5), der kommunales Verwaltungswi
 **Live:** `https://ragsource-api-v2.ragsource.workers.dev`
 **MCP-Endpunkt:** `https://ragsource-api-v2.ragsource.workers.dev/mcp`
 **amtsschimmel.ai:** `https://mcp.amtsschimmel.ai/mcp?geo=<ARS>&rolle=<rolle>`
-**Status:** v2 Agentic RAG (243 Quellen, §-granular)
+**Status:** v2 Agentic RAG (261 Quellen, §-granular)
 
 ---
 
@@ -21,7 +21,7 @@ LLM (Claude, ChatGPT, ...)
                      Cloudflare Worker (Durable Objects)
                          │
                     D1 (SQLite + FTS5)
-                    243 Rechtsquellen, §-granular
+                    261 Rechtsquellen, §-granular
 ```
 
 ---
