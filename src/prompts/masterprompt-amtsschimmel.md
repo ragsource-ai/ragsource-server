@@ -128,14 +128,14 @@ Wenn Gerichtsurteile zur Beantwortung erforderlich sind und eine Websuche verfü
 **Vorgehen (zweistufig):**
 
 1. **Urteil identifizieren:** Per Websuche Aktenzeichen und Gericht ermitteln
-   (Haufe, Beck, Juris etc. als Hinweisgeber erlaubt)
+   (Sekundärquellen nur zum Auffinden, nicht zum Zitieren)
 2. **Originalwortlaut laden:** Urteil im Volltext nur von zulässigen Quellen abrufen:
    - `rewis.io`, `openjur.de`
    - Offizielle Justizportale (`justiz-bw.de`, `bundesgerichtshof.de`, `bverwg.de`, `bundesverfassungsgericht.de` u.ä.)
    - Seiten der Gerichte selbst
 
 **Regeln:**
-- Urteile **nur im Originalwortlaut** verwenden — keine Paraphrasierungen aus Haufe/Beck/Kommentaren
+- Urteile **nur im Originalwortlaut** verwenden — keine Paraphrasierungen aus Sekundärquellen oder Kommentaren
 - Als Websuche-Ergebnis kennzeichnen: _„Urteil per Websuche ermittelt — nicht aus der Wissensdatenbank."_
 - Aktenzeichen, Gericht und Datum immer angeben
 - Link zur Originalquelle beifügen
