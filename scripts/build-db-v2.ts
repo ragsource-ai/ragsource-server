@@ -80,9 +80,9 @@ const TOKEN_LARGE = 15_000;
 // Kein Limit auf Heading-Ebene (2–6 Rauten) um ##### und ###### (GKZ BW) zu erfassen
 // Fallback: Dateien ohne Standard-§-Headings (z.B. Gebührenverzeichnisse mit Prod. Nr.)
 // erhalten einen zweiten Parsing-Durchlauf — alle ##/###-Headings als Abschnittsgrenzen.
-const SECTION_HEADING_MATCH_RE = /^(#{2,6})\s+(§\s*\d+[a-z]?|Artikel\s+\d+[a-z]?|Art\.\s*\d+[a-z]?|Erwägungsgrund\s+\d+|EG\s+\d+|Kapitel\s+\d+[a-z]?)\s*(?:[—–-]\s*)?(.*)?$/i;
+const SECTION_HEADING_MATCH_RE = /^(#{2,6})\s+(§\s*\d+[a-z]?|Artikel\s+\d+[a-z]?|Art\.\s*\d+[a-z]?|Erwägungsgrund\s+\d+|EG\s+\d+|Kapitel\s+\d+[a-z]?|Anhang\s+\d+[a-z]?)\s*(?:[—–-]\s*)?(.*)?$/i;
 // Für das Splitting: Beginnt eine Zeile mit einem §/Artikel/Erwägungsgrund-Heading (2–6 Rauten)?
-const SECTION_START_RE = /^#{2,6}\s+(?:§\s*\d+[a-z]?|Artikel\s+\d+[a-z]?|Art\.\s*\d+[a-z]?|Erwägungsgrund\s+\d+|EG\s+\d+|Kapitel\s+\d+[a-z]?)/m;
+const SECTION_START_RE = /^#{2,6}\s+(?:§\s*\d+[a-z]?|Artikel\s+\d+[a-z]?|Art\.\s*\d+[a-z]?|Erwägungsgrund\s+\d+|EG\s+\d+|Kapitel\s+\d+[a-z]?|Anhang\s+\d+[a-z]?)/m;
 
 // -----------------------------------------------------------------------
 // CLI-Argumente

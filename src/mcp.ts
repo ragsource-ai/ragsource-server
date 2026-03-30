@@ -920,7 +920,7 @@ function normalizeSectionRef(ref: string): string {
  */
 function extractSectionRef(ref: string): string | null {
   const m = ref.match(
-    /^(§\s*\d+[a-z]?|Art\.\s*\d+[a-z]?|Artikel\s+\d+[a-z]?|Erwägungsgrund\s+\d+|EG\s+\d+|Kapitel\s+\d+[a-z]?)\b/i,
+    /^(§\s*\d+[a-z]?|Art\.\s*\d+[a-z]?|Artikel\s+\d+[a-z]?|Erwägungsgrund\s+\d+|EG\s+\d+|Kapitel\s+\d+[a-z]?|Anhang\s+\d+[a-z]?)\b/i,
   );
   return m ? normalizeSectionRef(m[1]) : null;
 }
