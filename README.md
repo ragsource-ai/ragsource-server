@@ -5,7 +5,7 @@ Cloudflare Worker mit D1-Datenbank (SQLite + FTS5), der kommunales Verwaltungswi
 **Live:** `https://ragsource-api-v2.ragsource.workers.dev`
 **MCP-Endpunkt:** `https://ragsource-api-v2.ragsource.workers.dev/mcp`
 **amtsschimmel.ai:** `https://mcp.amtsschimmel.ai/mcp?geo=<ARS>&rolle=<rolle>`
-**Status:** v2 Agentic RAG (261 Quellen, §-granular)
+**Status:** v2 Agentic RAG (261 Quellen, abschnittsgranular)
 
 ---
 
@@ -21,7 +21,7 @@ LLM (Claude, ChatGPT, ...)
                      Cloudflare Worker (Durable Objects)
                          │
                     D1 (SQLite + FTS5)
-                    261 Rechtsquellen, §-granular
+                    261 Rechtsquellen, abschnittsgranular
 ```
 
 ---
@@ -38,7 +38,8 @@ ragsource-server/
 │       ├── normalize.ts      # Geo-Aufloesung: geo-Parameter → ARS + Ebene + Klarnamen
 │       └── hierarchy.ts      # Normenhierarchie-Sortierung
 ├── scripts/
-│   └── build-db-v2.ts        # Markdown → D1 Build-Pipeline
+│   ├── build-db-v2.ts        # Markdown → D1 Build-Pipeline
+│   └── test-parser.ts        # Parser-Tests (9 Szenarien)
 ├── data/
 │   └── gemeinden.json        # Single Source of Truth: ARS, Klarnamen, Aliases
 ├── schema.sql                # Datenbank-Schema (FTS5 + Tabellen + Indizes)
@@ -122,7 +123,21 @@ beschreibung: Regelungen zur Gemeindefeuerwehr (Aufgaben, Stärke, Kommandant)
 ...
 ```
 
-Heading-Konvention: `##` fuer Strukturelemente, `###` fuer abrufbare §§/Artikel.
+**Heading-Konvention:** Jedes `###`-Heading ist eine abrufbare Section (§, Artikel, Anhang, numerischer Abschnitt, generischer Text). `##`-Headings sind Strukturelemente und landen im Body der nächsten `###`-Section.
+
+**Section-Typen** (`section_type`-Feld in der DB):
+
+| Wert | Bedingung | Beispiel |
+|------|-----------|---------|
+| `paragraph` | Default (§ oder generisches Heading) | `§ 1`, `§ 38 a`, `Vorwort` |
+| `artikel` | `Artikel N` oder `Art. N` | `Artikel 6`, `Art. 12a` |
+| `erwaegungsgrund` | `Erwägungs...` oder `EG N` | `EG 5`, `Erwägungsgrund 12` |
+| `kapitel` | `Kapitel N` | `Kapitel 1` |
+| `anhang` | `Anhang N` | `Anhang 1`, `Anhang A` |
+| `abschnitt` | Startet mit Ziffer | `1`, `7`, `2.1`, `3.2.1` |
+| `eintrag` | Fallback (keine `###`-Headings) | `Nr. 1 Gebührenposition` |
+
+**§ N a (BW-Stil):** Leerzeichen vor dem Buchstaben-Suffix wird korrekt geparst — `§ 38 a` und `§ 38a` sind beide valide.
 
 ---
 
@@ -142,6 +157,14 @@ npm run db:init:local
 npm run db:seed:local      # Laedt test-articles/ in lokale DB
 npm run dev                # Startet lokalen Dev-Server auf :8787
 ```
+
+### Parser testen
+
+```bash
+npx tsx scripts/test-parser.ts
+```
+
+Prueft den Markdown-Parser gegen 9 Szenarien: plain-numerische Headings, Standard-§, Anhang, generische Headings, `##`/`####` als Body, TOC-Erkennung, Fallback-Parser, Dezimalabschnitte.
 
 ### Mit eigenem Content-Repo
 

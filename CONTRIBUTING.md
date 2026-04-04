@@ -38,6 +38,9 @@ npm run dev
 ### Lokale Tests
 
 ```bash
+# Parser-Tests
+npx tsx scripts/test-parser.ts
+
 # Health-Check
 curl http://localhost:8787/api/health
 

@@ -5,6 +5,22 @@ Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [2.5.0] — 2026-04-04
+
+### Geändert
+- **Parser-Umstellung**: Jedes `###`-Heading ist jetzt eine Section-Grenze, unabhängig vom Inhalt. Bisher musste ein Heading `§`, `Art.`, `Kapitel` o.ä. enthalten. `##`-Headings sind weiterhin Strukturelemente und landen im Body der laufenden Section.
+- **Neue sectionType-Werte**: `"abschnitt"` für plain-numerische Headings (z.B. `### 7 Anforderungen...` in IndBauRL, VwVen), `"anhang"` explizit für Anhang-Headings.
+- **§ N a-Parsing**: Leerzeichen vor Buchstaben-Suffix korrekt unterstützt (`§ 38 a` statt `§ 38`, BW-Stil).
+
+### Hinzugefügt
+- `scripts/test-parser.ts`: 9 automatisierte Parser-Tests für alle Section-Typen.
+
+### Behoben
+- **IndBauRL**: Abschnitte 1–9 wurden nicht indexiert (nur Anhänge 1+2). Ursache: `Anhang`-Headings verhinderten den Fallback-Parser.
+- **BW_FischG, BW_KomWG, BW_LNTVO**: 7 `## §`-Headings (§§ 1a, 21a, 44a, 38a, 39a, 39b, 11a) auf `###` angehoben (Content-Repo).
+
+---
+
 ## [2.4.0] — 2026-03-22
 
 ### Hinzugefügt
@@ -97,6 +113,7 @@ Erster stabiler Release des Agentic RAG v2-Systems. Vollständige Neuentwicklung
 
 ---
 
+[2.5.0]: https://github.com/ragsource-ai/ragsource-server/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/ragsource-ai/ragsource-server/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/ragsource-ai/ragsource-server/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/ragsource-ai/ragsource-server/compare/v2.1.0...v2.2.0
