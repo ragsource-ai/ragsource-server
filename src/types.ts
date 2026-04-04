@@ -50,7 +50,7 @@ export interface SourceSection {
   section_ref: string;          // "§ 2", "Artikel 6", "Erwägungsgrund 40"
   heading: string | null;       // Titel ohne section_ref
   body: string;                 // Originalwortlaut
-  section_type: string;         // "paragraph" | "artikel" | "erwaegungsgrund" | "kapitel"
+  section_type: string;         // "paragraph" | "artikel" | "erwaegungsgrund" | "kapitel" | "anhang" | "abschnitt" | "eintrag"
   sort_order: number;
 }
 

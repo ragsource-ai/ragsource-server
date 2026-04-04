@@ -71,18 +71,17 @@ const API_CONCURRENCY = 5; // max. parallele D1-API-Anfragen
 const TOKEN_SMALL = 3_000;
 const TOKEN_LARGE = 15_000;
 
-// Regex für §-Headings — unterstützt alle Varianten aus dem bestehenden Content:
-//   - §: ## bis ###### § N, § Na (z.B. § 12a)
-//   - Artikel: #### Artikel N (DSGVO), ### Art. N
-//   - Erwägungsgrund: #### Erwägungsgrund N (DSGVO)
-//   - EG: ### EG N (Plan-Format)
-//   - Kapitel: ## Kapitel N
-// Kein Limit auf Heading-Ebene (2–6 Rauten) um ##### und ###### (GKZ BW) zu erfassen
-// Fallback: Dateien ohne Standard-§-Headings (z.B. Gebührenverzeichnisse mit Prod. Nr.)
-// erhalten einen zweiten Parsing-Durchlauf — alle ##/###-Headings als Abschnittsgrenzen.
-const SECTION_HEADING_MATCH_RE = /^(#{2,6})\s+(§\s*\d+[a-z]?|Artikel\s+\d+[a-z]?|Art\.\s*\d+[a-z]?|Erwägungsgrund\s+\d+|EG\s+\d+|Kapitel\s+\d+[a-z]?|Anhang\s+\d+[a-z]?)\s*(?:[—–-]\s*)?(.*)?$/i;
-// Für das Splitting: Beginnt eine Zeile mit einem §/Artikel/Erwägungsgrund-Heading (2–6 Rauten)?
-const SECTION_START_RE = /^#{2,6}\s+(?:§\s*\d+[a-z]?|Artikel\s+\d+[a-z]?|Art\.\s*\d+[a-z]?|Erwägungsgrund\s+\d+|EG\s+\d+|Kapitel\s+\d+[a-z]?|Anhang\s+\d+[a-z]?)/m;
+// Regex für strukturierte Heading-Extraktion (sectionRef + heading):
+//   - §: § N, § Na (z.B. § 12a)
+//   - Artikel: Artikel N, Art. N
+//   - Erwägungsgrund / EG
+//   - Kapitel N, Anhang N
+//   - Plain-numerisch: N, N.M, N.M.K (z.B. IndBauRL, VwVen)
+// Wird nur zur Extraktion von sectionRef/heading genutzt, nicht mehr als Gate.
+const SECTION_HEADING_MATCH_RE = /^(#{2,6})\s+(§\s*\d+(?:\s*[a-z](?![a-z]))?|Artikel\s+\d+[a-z]?|Art\.\s*\d+[a-z]?|Erwägungsgrund\s+\d+|EG\s+\d+|Kapitel\s+\d+[a-z]?|Anhang\s+\d+[a-z]?|\d+(?:\.\d+)*[a-z]?)\s*(?:[—–-]\s*)?(.*)?$/i;
+// Jedes ### -Heading ist eine Section-Grenze (unabhängig vom Inhalt).
+// Fallback: Dateien ohne ###-Headings erhalten einen zweiten Parsing-Durchlauf.
+const SECTION_START_RE = /^###\s+\S/;
 
 // -----------------------------------------------------------------------
 // CLI-Argumente
@@ -378,20 +377,24 @@ interface ParsedDocument {
 }
 
 /**
- * Parst eine Markdown-Datei (nach dem Frontmatter) in TOC + Paragraphen.
+ * Parst eine Markdown-Datei (nach dem Frontmatter) in TOC + Abschnitte.
  *
  * Erwartet die v2-Struktur:
  *   ## Inhaltsverzeichnis
  *   ...TOC-Inhalt...
  *
- *   ## ERSTER TEIL / ## Abschnitt... (optional, wird ignoriert)
- *   ### § 1 Titel
- *   ...Inhalt...
- *   ### § 2 Titel
+ *   ## ERSTER TEIL / ## Abschnitt... (optional, wird in Body absorbiert)
+ *   ### § 1 Titel          ← §-Paragraph
+ *   ### 7 Anforderungen... ← plain-numerischer Abschnitt (z.B. IndBauRL, VwVen)
+ *   ### Vorwort            ← beliebiges ### -Heading
  *   ...
  *
+ * Trennregel: Jedes ### -Heading öffnet einen neuen Abschnitt.
+ * ## -Headings (außer Inhaltsverzeichnis) werden in den Body des laufenden Abschnitts absorbiert.
+ * #### und tiefer werden ebenfalls als Body behandelt.
+ *
  * Wenn kein TOC-Block vorhanden: toc = null.
- * Wenn keine §-Headings vorhanden: sections = [] (alte v1-Artikel).
+ * Wenn keine ### -Headings vorhanden: Fallback auf alle ##/###-Headings.
  */
 function parseDocument(content: string): ParsedDocument {
   const lines = content.split(/\r?\n/); // CRLF + LF kompatibel
@@ -434,18 +437,30 @@ function parseDocument(content: string): ParsedDocument {
   function flushSection() {
     if (!currentHeadingLine) return;
 
-    const headingMatch = currentHeadingLine.match(SECTION_HEADING_MATCH_RE);
-    if (!headingMatch) return;
-
-    const sectionRef = headingMatch[2].trim();
-    const headingText = (headingMatch[3] || "").trim();
     const body = currentSectionLines.join("\n").trim();
+    let sectionRef: string;
+    let headingText: string;
+
+    const headingMatch = currentHeadingLine.match(SECTION_HEADING_MATCH_RE);
+    if (headingMatch) {
+      // Strukturiertes Heading: §, Art., Kapitel, Anhang, plain-numerisch
+      sectionRef = headingMatch[2].trim();
+      headingText = (headingMatch[3] || "").trim();
+    } else {
+      // Generisches Heading (z.B. "### Vorwort", "### A. Einkommensteuergesetz")
+      const m = currentHeadingLine.match(/^###\s+(.+?)(?:\s+[-—–]\s+(.*?))?$/);
+      if (!m) return;
+      sectionRef = m[1].trim();
+      headingText = (m[2] || "").trim();
+    }
 
     // Section-Type bestimmen
     let sectionType = "paragraph";
     if (/^Artikel\s/i.test(sectionRef) || /^Art\./i.test(sectionRef)) sectionType = "artikel";
     else if (/^Erwägungs/i.test(sectionRef) || /^EG\s/i.test(sectionRef)) sectionType = "erwaegungsgrund";
     else if (/^Kapitel/i.test(sectionRef)) sectionType = "kapitel";
+    else if (/^Anhang/i.test(sectionRef)) sectionType = "anhang";
+    else if (/^\d/.test(sectionRef)) sectionType = "abschnitt";
 
     sections.push({
       sectionRef,
@@ -475,9 +490,9 @@ function parseDocument(content: string): ParsedDocument {
   // Letzten Abschnitt flush
   flushSection();
 
-  // Fallback-Parser: Falls keine Standard-Abschnitte gefunden wurden
-  // (z.B. Gebührenverzeichnisse mit Prod. Nr., Nr. N oder Amtsbezeichnungen
-  // statt §-Headings), alle ##/###-Headings als Abschnittsgrenzen behandeln.
+  // Fallback-Parser: Falls keine ###-Headings vorhanden sind
+  // (z.B. Gebührenverzeichnisse mit ausschließlich ##-Headings),
+  // alle ##/###-Headings als Abschnittsgrenzen behandeln.
   if (sections.length === 0) {
     const FALLBACK_HEADING_RE = /^(#{2,6})\s+(.+?)(?:\s+[-—–]\s+(.*?))?$/;
     let fbLines: string[] = [];
