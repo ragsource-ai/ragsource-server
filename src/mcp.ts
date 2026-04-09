@@ -225,6 +225,7 @@ const INSTRUCTIONS_BUILDERS: Record<string, InstructionsBuilder> = {
 const ENDPOINT_BY_HOST: Record<string, string> = {
   "mcp.amtsschimmel.ai": "amtsschimmel",
   "mcp-lean.amtsschimmel.ai": "amtsschimmel",
+  "mcp.paragrafenreiter.ai": "all",
 };
 
 /** Gibt den Endpoint-Slug des aktuellen Hosts zurück. */
