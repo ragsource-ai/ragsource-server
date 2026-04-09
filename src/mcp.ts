@@ -284,6 +284,8 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
   private _currentHost: string = "";
   /** Geo-Parameter aus der MCP-URL (?geo=...) — für geo-Hinweis in Instructions */
   private _currentGeo: string = "";
+  /** Extension-Filter aus der MCP-URL (?extensions=Feuerwehr,Arbeitsrecht) */
+  private _currentExtensions: string[] = [];
 
   /**
    * Placeholder-Server (nötig weil McpAgent die Property beim Start liest).
@@ -305,9 +307,12 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
       const url = new URL(request.url);
       this._currentHost = url.hostname;
       this._currentGeo = url.searchParams.get("geo") ?? "";
+      const ext = url.searchParams.get("extensions");
+      this._currentExtensions = ext ? ext.split(",").map((e) => e.trim()).filter(Boolean) : [];
     } catch {
       this._currentHost = "";
       this._currentGeo = "";
+      this._currentExtensions = [];
     }
     return super.fetch(request);
   }
@@ -393,7 +398,8 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         };
         const geoFilter = geoUnresolved ? GEO_BUND_ONLY : buildGeoFilter(geo);
         const endpointFilter = buildEndpointFilter(resolveMandatoryEndpoint());
-        const extensionsFilter = buildExtensionsFilter(extensionsInput ?? []);
+        const effectiveExtensions = extensionsInput?.length ? extensionsInput : this._currentExtensions;
+        const extensionsFilter = buildExtensionsFilter(effectiveExtensions);
 
         // Quellen abfragen — alle Felder, die das LLM braucht
         const sql = `
@@ -830,7 +836,8 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         const geo = (geoResult && "ambiguous" in geoResult ? null : geoResult) as ResolvedGeo | null;
         const geoFilter = buildGeoFilter(geo);
         const endpointFilter = buildEndpointFilter(resolveMandatoryEndpoint());
-        const extensionsFilter = buildExtensionsFilter(extensionsInput ?? []);
+        const effectiveExtensions = extensionsInput?.length ? extensionsInput : this._currentExtensions;
+        const extensionsFilter = buildExtensionsFilter(effectiveExtensions);
 
         // FTS5-Query bauen (Hauptquery + Hints zusammenführen)
         const allTerms = [query, ...(hints ?? [])].join(" ");
