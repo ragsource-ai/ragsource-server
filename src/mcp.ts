@@ -89,22 +89,59 @@ function buildGeoFilter(geo: ResolvedGeo | null): SqlFragment {
 }
 
 /**
- * Baut einen Projekt-Filter für die sources-Tabelle (Alias: s).
+ * Baut einen Sammlungs-Filter für die sources-Tabelle (Alias: s).
  *
- * Quellen ohne Projekt-Einträge sind für alle Projekte sichtbar.
- * Quellen mit Einträgen nur, wenn das Projekt übereinstimmt.
+ * Quellen ohne Sammlungs-Einträge sind universell sichtbar.
+ *
+ * mandatory: Tenancy-AND-Bedingung (vom MCP-Host gesetzt, z.B. "amtsschimmel").
+ *   Leer = kein Tenancy-Filter (Direktaufruf).
+ * userFilters: Topic-Filter (OR-verknüpft, AND mit mandatory).
+ *   Leer = kein Topic-Filter.
+ *
+ * Topic-Universal-Regel (wenn mandatory gesetzt):
+ *   Quellen, die NUR den Tenancy-Tag haben (keine Topic-Tags), gelten als
+ *   topic-universal und erscheinen unabhängig von userFilters.
  */
-function buildProjektFilter(projekt: string | undefined): SqlFragment {
-  if (!projekt) {
-    return { sql: "1=1", params: [] };
+function buildSammlungFilter(
+  mandatory: string | undefined,
+  userFilters: string[],
+): SqlFragment {
+  const conditions: string[] = [];
+  const params: (string | null)[] = [];
+
+  // Tenancy (AND): leer = alles durch
+  if (mandatory) {
+    conditions.push(`(
+      NOT EXISTS (SELECT 1 FROM source_sammlungen ss WHERE ss.source_id = s.id)
+      OR EXISTS (SELECT 1 FROM source_sammlungen ss WHERE ss.source_id = s.id AND ss.sammlung = ?)
+    )`);
+    params.push(mandatory);
   }
-  return {
-    sql: `(
-      NOT EXISTS (SELECT 1 FROM source_projekte sp WHERE sp.source_id = s.id)
-      OR EXISTS (SELECT 1 FROM source_projekte sp WHERE sp.source_id = s.id AND sp.projekt = ?)
-    )`,
-    params: [projekt],
-  };
+
+  // Topic-Filter (OR intern, AND mit Tenancy): leer = alles durch
+  if (userFilters.length > 0) {
+    const ph = userFilters.map(() => "?").join(", ");
+    if (mandatory) {
+      // Tenancy-Kontext bekannt: Quelle mit NUR Tenancy-Tag = topic-universal
+      conditions.push(`(
+        NOT EXISTS (SELECT 1 FROM source_sammlungen ss WHERE ss.source_id = s.id)
+        OR NOT EXISTS (SELECT 1 FROM source_sammlungen ss WHERE ss.source_id = s.id AND ss.sammlung NOT IN (?))
+        OR EXISTS (SELECT 1 FROM source_sammlungen ss WHERE ss.source_id = s.id AND ss.sammlung IN (${ph}))
+      )`);
+      params.push(mandatory, ...userFilters);
+    } else {
+      // Direktaufruf: kein Tenancy-Kontext, kein topic-universal via Tenancy-Tag
+      conditions.push(`(
+        NOT EXISTS (SELECT 1 FROM source_sammlungen ss WHERE ss.source_id = s.id)
+        OR EXISTS (SELECT 1 FROM source_sammlungen ss WHERE ss.source_id = s.id AND ss.sammlung IN (${ph}))
+      )`);
+      params.push(...userFilters);
+    }
+  }
+
+  return conditions.length === 0
+    ? { sql: "1=1", params: [] }
+    : { sql: conditions.join(" AND "), params };
 }
 
 // -----------------------------------------------------------------------
@@ -200,21 +237,21 @@ const INSTRUCTIONS_BUILDERS: Record<string, InstructionsBuilder> = {
 // Projekt-Erkennung via Host-Header
 // -----------------------------------------------------------------------
 
-/** Mappt Hostnamen auf Projekt-Slugs (für Mandanten-Filter) */
-const PROJEKT_BY_HOST: Record<string, string> = {
+/** Mappt Hostnamen auf Tenancy-Slugs (Pflicht-AND-Bedingung für Sammlungs-Filter) */
+const SAMMLUNG_BY_HOST: Record<string, string> = {
   "mcp.amtsschimmel.ai": "amtsschimmel",
+  "mcp-lean.amtsschimmel.ai": "amtsschimmel",
 };
 
 /**
- * Gibt den effektiven Projekt-Slug zurück.
- * Priorität: expliziter Parameter > Host-Header > undefined
+ * Gibt den Tenancy-Slug des aktuellen Hosts zurück (Pflicht-AND-Bedingung).
+ * Direktaufruf (kein Host-Eintrag) → undefined = kein Tenancy-Filter.
  */
-function resolveProjekt(explicitProjekt: string | undefined): string | undefined {
-  if (explicitProjekt) return explicitProjekt;
+function resolveMandatorySammlung(): string | undefined {
   try {
     const { request } = getCurrentAgent();
     const hostname = new URL(request?.url ?? "").hostname;
-    return PROJEKT_BY_HOST[hostname] ?? undefined;
+    return SAMMLUNG_BY_HOST[hostname] ?? undefined;
   } catch {
     return undefined;
   }
@@ -294,14 +331,14 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
   }
 
   async init() {
-    // Projekt aus Host ableiten
-    const projekt = PROJEKT_BY_HOST[this._currentHost];
+    // Tenancy aus Host ableiten
+    const sammlung = SAMMLUNG_BY_HOST[this._currentHost];
 
-    // Kurze Instructions bauen: projekt-spezifischer Builder oder generischer Default.
+    // Kurze Instructions bauen: sammlung-spezifischer Builder oder generischer Default.
     // geo wird als ARS-Code (Raw aus ?geo= URL-Param) direkt übergeben — kein resolveGeo nötig.
     // sessionGeo nur für Instructions-Text (init-Zeit); Tool-Handler lesen _currentGeo direkt.
     const sessionGeo = this._currentGeo || null;
-    const builder = projekt ? INSTRUCTIONS_BUILDERS[projekt] : undefined;
+    const builder = sammlung ? INSTRUCTIONS_BUILDERS[sammlung] : undefined;
     const instructions = builder ? builder(sessionGeo) : INSTRUCTIONS_DEFAULT;
 
     this.server = new McpServer(
@@ -330,16 +367,21 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             "12-stellig=Gemeinde, 9-stellig=Verband, 5-stellig=Kreis, 2-stellig=Land. " +
             "Beispiele: '081175009012' (Bad Boll), '08117' (LKR Göppingen), '08' (BW).",
           ),
+        sammlungen: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Optionale Topic-Filter (ODER-verknüpft) — schränkt den Katalog thematisch ein. " +
+            "Leer = alle Quellen der Tenancy. " +
+            "Beispiele: 'Feuerwehr', 'Baurecht', 'Wahlrecht', 'Datenschutz'.",
+          ),
         projekt: z
           .string()
           .optional()
-          .describe(
-            "Mandanten-Filter. Wird automatisch aus dem Host-Header erkannt — " +
-            "nur setzen wenn explizit ein anderes Projekt benötigt wird.",
-          ),
+          .describe("Legacy-Alias für sammlungen[0] — wird noch unterstützt."),
       },
       { title: "RAGSource catalog", readOnlyHint: true, destructiveHint: false },
-      async ({ geo: geoInput, projekt: projektInput }) => {
+      async ({ geo: geoInput, sammlungen: sammlungenInput, projekt: projektLegacy }) => {
         const db = this.env.DB;
 
         // KV: Broadcast-Nachricht (Wartung, Updates) + Nicht-konfiguriert-Meldung
@@ -368,7 +410,13 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           params: [],
         };
         const geoFilter = geoUnresolved ? GEO_BUND_ONLY : buildGeoFilter(geo);
-        const projektFilter = buildProjektFilter(resolveProjekt(projektInput));
+        // Legacy: projekt-Parameter als sammlungen[0] behandeln
+        const userFilters: string[] = sammlungenInput?.length
+          ? sammlungenInput
+          : projektLegacy
+            ? [projektLegacy]
+            : [];
+        const sammlungFilter = buildSammlungFilter(resolveMandatorySammlung(), userFilters);
 
         // Quellen abfragen — alle Felder, die das LLM braucht
         const sql = `
@@ -376,7 +424,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
                  EXISTS(SELECT 1 FROM source_tocs t WHERE t.source_id = s.id) AS toc_available
           FROM sources s
           WHERE ${geoFilter.sql}
-            AND ${projektFilter.sql}
+            AND ${sammlungFilter.sql}
           ORDER BY s.ebene, s.titel
         `;
 
@@ -391,7 +439,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         };
         const result = await db
           .prepare(sql)
-          .bind(...geoFilter.params, ...projektFilter.params)
+          .bind(...geoFilter.params, ...sammlungFilter.params)
           .all<CatalogRow>();
 
         const sources = result.results ?? [];
@@ -762,9 +810,9 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     );
 
     // ===================================================================
-    // Tool 4: RAGSource_query
+    // Tool 4: RAGSource_query (nicht im Compliance-Modus)
     // ===================================================================
-    this.server.tool(
+    if (!this.env.DISABLE_QUERY) this.server.tool(
       "RAGSource_query",
       "FALLBACK — nur wenn RAGSource_catalog keine passende Quelle liefert oder das Thema unklar ist. " +
       "FTS5-Volltextsuche über alle indizierten Paragraphen. " +
@@ -780,10 +828,14 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             "Geo-Filter: ARS-Code (2/5/9/12 Stellen) oder Klarname. " +
             "Beispiele: '08', '08117', '081175009012', 'Bad Boll'",
           ),
+        sammlungen: z
+          .array(z.string())
+          .optional()
+          .describe("Optionale Topic-Filter (ODER-verknüpft). Leer = alle Quellen der Tenancy."),
         projekt: z
           .string()
           .optional()
-          .describe("Projekt-Slug, z.B. 'amtsschimmel'"),
+          .describe("Legacy-Alias für sammlungen[0] — wird noch unterstützt."),
         hints: z
           .array(z.string())
           .optional()
@@ -792,7 +844,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           ),
       },
       { title: "RAGSource query", readOnlyHint: true, destructiveHint: false },
-      async ({ query, geo: geoInput, projekt: projektInput, hints }) => {
+      async ({ query, geo: geoInput, sammlungen: sammlungenInput, projekt: projektLegacy, hints }) => {
         const db = this.env.DB;
 
         // Geo auflösen; URL-?geo= als Request-Default wenn kein expliziter Parameter.
@@ -803,7 +855,13 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         // Bei ambiguem Geo im query-Tool: kein Geo-Filter (FTS sucht im Gesamtbestand)
         const geo = (geoResult && "ambiguous" in geoResult ? null : geoResult) as ResolvedGeo | null;
         const geoFilter = buildGeoFilter(geo);
-        const projektFilter = buildProjektFilter(resolveProjekt(projektInput));
+        // Legacy: projekt-Parameter als sammlungen[0] behandeln
+        const userFilters: string[] = sammlungenInput?.length
+          ? sammlungenInput
+          : projektLegacy
+            ? [projektLegacy]
+            : [];
+        const sammlungFilter = buildSammlungFilter(resolveMandatorySammlung(), userFilters);
 
         // FTS5-Query bauen (Hauptquery + Hints zusammenführen)
         const allTerms = [query, ...(hints ?? [])].join(" ");
@@ -834,14 +892,14 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           JOIN sources s ON ss.source_id = s.id
           WHERE sections_fts MATCH ?
             AND ${geoFilter.sql}
-            AND ${projektFilter.sql}
+            AND ${sammlungFilter.sql}
           ORDER BY rank
           LIMIT 20
         `;
 
         const result = await db
           .prepare(sql)
-          .bind(ftsQuery, ...geoFilter.params, ...projektFilter.params)
+          .bind(ftsQuery, ...geoFilter.params, ...sammlungFilter.params)
           .all<{
             section_ref: string;
             heading: string | null;

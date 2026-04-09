@@ -13,6 +13,8 @@ export interface Env {
   MCP_OBJECT: DurableObjectNamespace;
   CONFIG: KVNamespace;
   RATE_LIMITER: RateLimiter;
+  /** Wenn "true": RAGSource_query wird nicht registriert (Compliance-Modus) */
+  DISABLE_QUERY?: string;
 }
 
 // -----------------------------------------------------------------------

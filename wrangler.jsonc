@@ -51,5 +51,19 @@
         "simple": { "limit": 60, "period": 60 }
       }
     ]
+  },
+
+  // -----------------------------------------------------------------------
+  // Lean-Deployment: kein RAGSource_query (Compliance-Modus für Testkunden)
+  // Deploy: wrangler deploy --env lean
+  // URL:    mcp-lean.amtsschimmel.ai (Custom Domain in CF-Dashboard setzen)
+  // -----------------------------------------------------------------------
+  "env": {
+    "lean": {
+      "name": "ragsource-api-v2-lean",
+      "vars": {
+        "DISABLE_QUERY": "true"
+      }
+    }
   }
 }

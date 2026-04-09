@@ -36,14 +36,14 @@ CREATE INDEX IF NOT EXISTS idx_sources_gemeinde_ars ON sources(gemeinde_ars);
 CREATE INDEX IF NOT EXISTS idx_sources_size_class ON sources(size_class);
 
 -- -----------------------------------------------------------------------
--- Projekt-Zuordnung (Mandantenfähigkeit: amtsschimmel, brandmeister etc.)
+-- Sammlungs-Zuordnung (Mandantenfähigkeit + Themen: amtsschimmel, Baurecht etc.)
 -- -----------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS source_projekte (
+CREATE TABLE IF NOT EXISTS source_sammlungen (
   source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-  projekt TEXT NOT NULL,
-  PRIMARY KEY (source_id, projekt)
+  sammlung TEXT NOT NULL,
+  PRIMARY KEY (source_id, sammlung)
 );
-CREATE INDEX IF NOT EXISTS idx_source_projekte_projekt ON source_projekte(projekt);
+CREATE INDEX IF NOT EXISTS idx_source_sammlungen_sammlung ON source_sammlungen(sammlung);
 
 -- -----------------------------------------------------------------------
 -- Inhaltsverzeichnisse (aus Markdown extrahiert oder manuell kuratiert)

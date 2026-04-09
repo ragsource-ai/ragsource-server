@@ -562,7 +562,8 @@ if (!isIncremental) {
     "DROP TABLE IF EXISTS source_relations;",
     "DROP TABLE IF EXISTS source_sections;",
     "DROP TABLE IF EXISTS source_tocs;",
-    "DROP TABLE IF EXISTS source_projekte;",
+    "DROP TABLE IF EXISTS source_sammlungen;",
+    "DROP TABLE IF EXISTS source_projekte;",  // Legacy-Cleanup
     "DROP TABLE IF EXISTS sources;",
     ...(skipGemeinden ? [] : [
       "DROP TABLE IF EXISTS gemeinden;",
@@ -834,8 +835,8 @@ for (const { file, root } of mdFilesWithRoot) {
   // Dateipfad relativ zum Content-Root
   const dateipfad = relative(root, file).replace(/\\/g, "/");
 
-  // Projekte
-  const projekte: string[] = fm.projekte || [];
+  // Sammlungen (inkl. Legacy-Alias "projekte")
+  const projekte: string[] = fm.sammlungen ?? fm.projekte ?? [];
 
   imported++;
   console.log(
@@ -859,10 +860,10 @@ for (const { file, root } of mdFilesWithRoot) {
     ],
   });
 
-  // 2. source_projekte
+  // 2. source_sammlungen
   for (const p of projekte) {
     group.push({
-      sql: `INSERT INTO source_projekte (source_id, projekt) VALUES (?, ?);`,
+      sql: `INSERT INTO source_sammlungen (source_id, sammlung) VALUES (?, ?);`,
       params: [sourceId, p],
     });
   }
