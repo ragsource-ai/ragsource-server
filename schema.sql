@@ -36,14 +36,26 @@ CREATE INDEX IF NOT EXISTS idx_sources_gemeinde_ars ON sources(gemeinde_ars);
 CREATE INDEX IF NOT EXISTS idx_sources_size_class ON sources(size_class);
 
 -- -----------------------------------------------------------------------
--- Sammlungs-Zuordnung (Mandantenfähigkeit + Themen: amtsschimmel, Baurecht etc.)
+-- Endpoint-Zuordnung (Tenancy: amtsschimmel, brandmeister etc.)
+-- Leer = universell sichtbar für alle Endpoints.
 -- -----------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS source_sammlungen (
+CREATE TABLE IF NOT EXISTS source_endpoints (
   source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-  sammlung TEXT NOT NULL,
-  PRIMARY KEY (source_id, sammlung)
+  endpoint TEXT NOT NULL,
+  PRIMARY KEY (source_id, endpoint)
 );
-CREATE INDEX IF NOT EXISTS idx_source_sammlungen_sammlung ON source_sammlungen(sammlung);
+CREATE INDEX IF NOT EXISTS idx_source_endpoints_endpoint ON source_endpoints(endpoint);
+
+-- -----------------------------------------------------------------------
+-- Extension-Zuordnung (Thematische Filter: Arbeitsrecht, Feuerwehr etc.)
+-- Leer = immer sichtbar (kein Themen-Filter nötig).
+-- -----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS source_extensions (
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  extension TEXT NOT NULL,
+  PRIMARY KEY (source_id, extension)
+);
+CREATE INDEX IF NOT EXISTS idx_source_extensions_extension ON source_extensions(extension);
 
 -- -----------------------------------------------------------------------
 -- Inhaltsverzeichnisse (aus Markdown extrahiert oder manuell kuratiert)
