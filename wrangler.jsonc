@@ -63,6 +63,43 @@
       "name": "ragsource-api-v2-lean",
       "vars": {
         "DISABLE_QUERY": "true"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "ragsource-db-v2",
+          "database_id": "55d4deda-60c5-4b70-a6d1-2b76f43e5715"
+        }
+      ],
+      "kv_namespaces": [
+        {
+          "binding": "CONFIG",
+          "id": "e0af38b6cee446adb258055e172c8a26"
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "class_name": "RAGSourceMCPv2",
+            "name": "MCP_OBJECT"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "new_sqlite_classes": ["RAGSourceMCPv2"],
+          "tag": "v1"
+        }
+      ],
+      "unsafe": {
+        "bindings": [
+          {
+            "type": "ratelimit",
+            "name": "RATE_LIMITER",
+            "namespace_id": "1002",
+            "simple": { "limit": 60, "period": 60 }
+          }
+        ]
       }
     }
   }
