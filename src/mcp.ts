@@ -202,11 +202,6 @@ const INSTRUCTIONS_DEFAULT =
   "Normenhierarchie: Höherrangiges Recht bricht niederrangiges (z.B. Bundesgesetz > Landesgesetz). " +
   "Bei Konflikten: höherrangige Norm zitieren, Widerspruch benennen.";
 
-/** Mappt Endpoint-Slugs auf Hardcode-Fallback-Builder (greift wenn kein KV-Eintrag vorhanden) */
-type InstructionsBuilder = (geo: string | null) => string;
-
-const INSTRUCTIONS_BUILDERS: Record<string, InstructionsBuilder> = {};
-
 // -----------------------------------------------------------------------
 // Projekt-Erkennung via Host-Header
 // -----------------------------------------------------------------------
