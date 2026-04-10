@@ -1,31 +1,51 @@
-# RAGSource Server
+# RAGSource Server v2
 
-Cloudflare Worker mit D1-Datenbank (SQLite + FTS5), der kommunales Verwaltungswissen als agentic RAG-System bereitstellt -- erreichbar ueber MCP (Model Context Protocol).
+Cloudflare Worker mit D1 (SQLite + FTS5), der Rechtswissen und vertrauliche Dokumente als Agentic-RAG-System über MCP (Model Context Protocol) bereitstellt.
 
-**Live (prod):** `https://ragsource-api-v2.ragsource.workers.dev/mcp`
-**amtsschimmel.ai:** `https://mcp.amtsschimmel.ai/mcp?geo=<ARS>`
-**amtsschimmel lean:** `https://mcp-lean.amtsschimmel.ai/mcp?geo=<ARS>` (kein `RAGSource_query`)
-**paragrafenreiter.ai:** `https://mcp.paragrafenreiter.ai/mcp?geo=<ARS>&extensions=<Thema>`
-**brandmeister.ai:** `https://mcp.brandmeister.ai/mcp` (öffentlich, Endpoint-Filter)
-**brandmeister GP1:** `https://mcp-gp1.brandmeister.ai/mcp` (OAuth 2.0, Dual-DB)
-**Status:** v2 Agentic RAG (261 Quellen, abschnittsgranular, 5 Deployments)
+Eine Codebasis — beliebig viele isolierte Deployments, rein konfigurationsgetrieben.
 
 ---
 
-## Ueberblick
+## Live-Deployments
 
-RAGSource macht kommunales Verwaltungswissen fuer KI-Systeme zugaenglich. Der Server empfaengt Anfragen von LLMs (Claude, ChatGPT, etc.) und liefert compliance-geprueftes, hierarchisch geordnetes Rechtswissen auf Paragraphen-Ebene zurueck.
+| Deployment | URL | Auth | Besonderheit |
+|---|---|---|---|
+| prod | `mcp.amtsschimmel.ai/mcp` | keins | Standard; alle 4 Tools |
+| lean | `mcp-lean.amtsschimmel.ai/mcp` | keins | Kein `RAGSource_query` (`DISABLE_QUERY=true`) |
+| paragrafenreiter | `mcp.paragrafenreiter.ai/mcp` | keins | Kein Tenancy-Filter (alle Quellen sichtbar) |
+| brandmeister | `mcp.brandmeister.ai/mcp` | keins | Nur Feuerwehr-Quellen (Endpoint-Filter) |
+| brandmeister-gp1 | `mcp-gp1.brandmeister.ai/mcp` | OAuth | Feuerwehr-Quellen + vertrauliche GP1-Inhalte (Dual-DB) |
+
+Health-Check: `GET /api/health` (jeder Deployment)
+
+---
+
+## Architektur
 
 ```
-LLM (Claude, ChatGPT, ...)
+LLM (Claude Web / Desktop)
     │
     └── MCP-Protokoll → POST /mcp
+                             │
+                    Cloudflare Worker (index.ts)
+                    ├── OAuth-Endpunkte (bei GP1_TOKEN gesetzt)
+                    ├── Auth Guard (Bearer / OAuth-Token)
+                    ├── Rate Limiter (60 req/min pro IP)
+                    └── McpAgent Durable Object (mcp.ts)
                               │
-                     Cloudflare Worker (Durable Objects)
-                         │
-                    D1 (SQLite + FTS5)
-                    261 Rechtsquellen, abschnittsgranular
+                    D1 Hauptdatenbank (ragsource-db-v2)
+                    D1 GP1-Datenbank  (brandmeister-gp1, optional)
 ```
+
+### Multi-Tenant-Prinzip
+
+Drei Konfigurationsschalter unterscheiden alle Deployments — kein Code-Fork:
+
+| Schalter | Mechanismus | Wirkung |
+|---|---|---|
+| Endpoint-Filter | `ENDPOINT_BY_HOST` in `mcp.ts` (Host → Endpoint-Slug) | Welche Quellen aus der Haupt-DB sichtbar sind |
+| GP1-Datenbank | `DB_GP1`-Binding in `wrangler.jsonc` | Transparente Dual-DB: GP1-Inhalte werden ohne Markierung gemergt |
+| GP1-Auth | `GP1_TOKEN` Wrangler-Secret | Aktiviert OAuth 2.0 Authorization Server + Auth Guard |
 
 ---
 
@@ -34,126 +54,252 @@ LLM (Claude, ChatGPT, ...)
 ```
 ragsource-server/
 ├── src/
-│   ├── index.ts              # Entry point: /mcp → McpAgent, /api → Hono
-│   ├── mcp.ts                # MCP-Server (RAGSourceMCPv2 Durable Object)
-│   ├── types.ts              # TypeScript-Typen
+│   ├── index.ts        # Entry Point: OAuth-Endpunkte, Auth Guard, Rate Limit, Routing
+│   ├── mcp.ts          # McpAgent Durable Object — 4 MCP-Tools, Dual-DB-Logik
+│   ├── oauth.ts        # OAuth 2.0 Authorization Server (Authorization Code + PKCE)
+│   ├── types.ts        # TypeScript-Typen (Env, DB-Entitäten, Tool-Rückgaben)
 │   └── engine/
-│       ├── normalize.ts      # Geo-Aufloesung: geo-Parameter → ARS + Ebene + Klarnamen
-│       └── hierarchy.ts      # Normenhierarchie-Sortierung
+│       ├── normalize.ts  # Geo-Auflösung: geo-Parameter → ARS + Ebene
+│       └── hierarchy.ts  # Normenhierarchie-Sortierung
 ├── scripts/
-│   ├── build-db-v2.ts        # Markdown → D1 Build-Pipeline
-│   └── test-parser.ts        # Parser-Tests (9 Szenarien)
-├── data/
-│   └── gemeinden.json        # Single Source of Truth: ARS, Klarnamen, Aliases
-├── schema.sql                # Datenbank-Schema (FTS5 + Tabellen + Indizes)
-└── wrangler.jsonc            # Cloudflare-Konfiguration
+│   ├── build-db-v2.ts    # Markdown → D1 Build-Pipeline
+│   ├── sql-utils.ts      # SQL-Escape + Concat-Tree (testbar)
+│   └── sql-utils.test.ts # Unit-Tests
+├── schema.sql            # D1-Schema (Tabellen, Indizes, FTS5, Trigger)
+└── wrangler.jsonc        # Cloudflare-Konfiguration (alle Environments)
 ```
-
----
-
-## Technologie-Stack
-
-| Komponente | Technologie |
-|-----------|-------------|
-| Runtime | Cloudflare Workers (TypeScript) |
-| REST-Framework | Hono |
-| MCP | `@cloudflare/agents` SDK (Durable Objects) |
-| Datenbank | Cloudflare D1 (SQLite + FTS5) |
-| Build | Wrangler CLI, tsx |
-| CI/CD | GitHub Actions |
 
 ---
 
 ## MCP-Tools (Agentic RAG)
 
 | Tool | Funktion |
-|------|----------|
-| `RAGSource_catalog` | Pflichtaufruf: alle verfuegbaren Rechtsquellen fuer eine Gemeinde/Region |
-| `RAGSource_toc` | Inhaltsverzeichnis(se) einer oder mehrerer Quellen (Batch, max. 8) |
+|---|---|
+| `RAGSource_catalog` | Pflichtaufruf: verfügbare Rechtsquellen für eine Gemeinde/Region |
+| `RAGSource_toc` | Inhaltsverzeichnis einer oder mehrerer Quellen (Batch, max. 8) |
 | `RAGSource_get` | Originalwortlaut spezifischer Paragraphen (max. 50 §§ pro Aufruf) |
-| `RAGSource_query` | FTS5-Volltextsuche (Fallback) |
+| `RAGSource_query` | FTS5-Volltextsuche (Fallback; deaktivierbar mit `DISABLE_QUERY=true`) |
 
 ### Agentic Workflow
 
 ```
-RAGSource_catalog (geo=...) → liefert Quellen mit size_class
-    ├── small  → RAGSource_get direkt (kein TOC noetig)
-    └── medium/large → RAGSource_toc → RAGSource_get (gezielte Paragraphen)
+RAGSource_catalog(geo=...) → Quellen mit size_class
+    ├── small  → RAGSource_get direkt
+    └── medium/large → RAGSource_toc → RAGSource_get (gezielte §§)
 ```
 
-### Rechtsrang (Normenhierarchie)
+### Catalog-Format
 
-| Wert | Ebene |
-|------|-------|
-| 0 | EU-Recht |
-| 1 | Bundesrecht |
-| 2 | Landesrecht BW |
-| 3 | Kreisrecht |
-| 4 | Verbandsrecht |
-| 5 | Ortsrecht |
-| 6 | Tarifrecht |
+Kompaktes Array: `[id, titel, rechtsrang, size, toc_available, hint]`
+
+| Feld | Typ | Bedeutung |
+|---|---|---|
+| `rechtsrang` | `0–6 \| null` | 0=EU, 1=Bund, 2=Land, 3=Kreis, 4=Verband, 5=Gemeinde, 6=Tarif |
+| `size` | `S/M/L` | Basiert auf Token-Schätzung (S<3k, M<15k, L≥15k) |
+| `toc_available` | bool | Ob TOC abrufbar ist |
+| `hint` | string\|null | Kurzer Routing-Hinweis |
 
 ---
 
 ## Filter-Parameter
 
 | Parameter | Typ | Beschreibung |
-|-----------|-----|--------------|
-| `geo` | string | ARS-Code oder Klarname/Slug. ARS-Laenge bestimmt Ebene: `08` (Land), `08117` (Kreis), `081175009` (Verband), `081175009012` (Gemeinde). **"Nur aufwaerts":** Verbands-Anfragen zeigen nur Verband/Kreis/Land/Bund, keine Gemeinde-Quellen |
-| `extensions` | string | Kommagetrennte Themen-Filter (z.B. `Feuerwehr,Arbeitsrecht`). Quellen ohne Extensions-Eintrag sind immer sichtbar. Mehrere Extensions = OR-Verknuepfung |
+|---|---|---|
+| `geo` | string | ARS oder Klarname. Länge bestimmt Ebene: `08`=Land, `08117`=Kreis, `081175009`=Verband, `081175009012`=Gemeinde. Nur-aufwärts: Verbands-Anfragen zeigen keine Gemeindequellen |
+| `extensions` | string | Kommagetrennte Themen-Filter (z.B. `Feuerwehr,Arbeitsrecht`). Ohne Eintrag = immer sichtbar. Mehrere = OR |
 
-URL-Parameter (vorab-Konfiguration des DO via Custom Domain):
-```
-?geo=081175009012          # ARS der Gemeinde
-?extensions=Feuerwehr      # Nur Feuerwehr-Quellen + universelle Quellen
-?geo=081175009&extensions=Feuerwehr,Arbeitsrecht
+Tenancy (Endpoint-Filter) wird automatisch aus dem `Host`-Header der Custom Domain abgeleitet:
+
+```typescript
+// src/mcp.ts
+const ENDPOINT_BY_HOST: Record<string, string> = {
+  "mcp.amtsschimmel.ai":      "amtsschimmel",
+  "mcp-lean.amtsschimmel.ai": "amtsschimmel",
+  "mcp.paragrafenreiter.ai":  "all",
+  "mcp.brandmeister.ai":      "brandmeister",
+  "mcp-gp1.brandmeister.ai":  "brandmeister",
+};
 ```
 
-Tenancy (Endpoint-Filter) wird automatisch aus dem `Host`-Header der Custom Domain abgeleitet — kein URL-Parameter noetig.
+`"all"` → kein Endpoint-Filter. Kein Eintrag (z.B. `workers.dev`) → kein Filter (Entwicklung).
 
 ---
 
-## Content-Format (Rechtsquellen)
+## OAuth 2.0 (GP1-Deployments)
 
-Quellen sind Markdown-Dateien mit YAML-Frontmatter. Sie leben in `ragsource-ai/ragsource-content`.
+Aktiviert sich automatisch wenn `GP1_TOKEN` als Wrangler Secret gesetzt ist. Implementiert in `src/oauth.ts`.
+
+### Endpunkte
+
+| Endpunkt | Spec | Funktion |
+|---|---|---|
+| `GET /.well-known/oauth-protected-resource` | RFC 9728 | Resource Metadata — Claude Web Discovery |
+| `GET /.well-known/oauth-authorization-server` | RFC 8414 | Auth Server Metadata |
+| `POST /oauth/register` | RFC 7591 | Dynamic Client Registration |
+| `GET /oauth/authorize` | RFC 6749 | Login-Formular (Passwort = GP1_TOKEN) |
+| `POST /oauth/authorize` | RFC 6749 | Token prüfen, Auth-Code ausstellen |
+| `POST /oauth/token` | RFC 6749 | Auth-Code + PKCE → Access Token |
+
+### Flow
+
+1. Claude Web entdeckt `/.well-known/oauth-protected-resource` via `WWW-Authenticate`-Header (401)
+2. Registriert sich dynamisch via `/oauth/register`
+3. Öffnet `/oauth/authorize` → Nutzer gibt GP1_TOKEN ein
+4. Worker stellt OAuth Access Token aus (TTL 1 Jahr, gespeichert in KV)
+5. Claude Web verwendet OAuth-Token als Bearer für alle MCP-Requests
+
+### Auth Guard
+
+Akzeptiert zwei Token-Arten:
+- **Statischer GP1_TOKEN** — für Claude Desktop, API-Direktzugriff
+- **KV-gespeicherter OAuth-Token** — für Claude Web
+
+KV-Keys (CONFIG-Namespace): `oauth:client:{id}`, `oauth:code:{code}` (TTL 600s), `oauth:token:{token}` (TTL 1 Jahr).
+
+### Token rotieren
+
+```bash
+wrangler secret put GP1_TOKEN --env brandmeister-gp1
+wrangler deploy --env brandmeister-gp1
+```
+
+Alte KV-OAuth-Tokens werden beim nächsten MCP-Request mit neuem Login ungültig (statischer Token ändert sich).
+
+---
+
+## Dual-DB (GP1)
+
+Wenn `DB_GP1` gebunden ist, mergt der Worker beide Datenbanken transparent:
+
+| Tool | Verhalten |
+|---|---|
+| `RAGSource_catalog` | Parallele Queries auf DB + DB_GP1, Dedup per Source-ID, kein Endpoint-Filter auf GP1 |
+| `RAGSource_toc` | DB zuerst, Fallback auf DB_GP1 bei unbekannter Source-ID |
+| `RAGSource_get` | DB zuerst für Source-Lookup, automatischer Wechsel zu DB_GP1 für unbekannte Sources |
+| `RAGSource_query` | FTS5 auf beiden DBs, Merge top 20, Dedup per `source_id::section_ref` |
+
+GP1-Quellen sind für den LLM nicht als "privat" markiert — Transparenz by design.
+
+---
+
+## Content-Format
+
+Quellen sind Markdown-Dateien mit YAML-Frontmatter.
+
+### Pflichtfelder
 
 ```yaml
 ---
 titel: Feuerwehrsatzung der Gemeinde Bad Boll
-ebene: gemeinde
-typ: satzung
+ebene: gemeinde          # eu | bund | land | kreis | verband | gemeinde | intern
+typ: satzung             # gesetz | satzung | verordnung | eu-recht | dienstanweisung | richtlinie | sonstiges
+---
+```
+
+### Optionale Felder
+
+```yaml
+id: FwSatzung_BadBoll           # Überschreibt Dateiname-Ableitung (empfohlen)
+kurzbezeichnung: FwSatzung BB
 land_ars: "08"
 kreis_ars: "08117"
 verband_ars: "081175009"
 gemeinde_ars: "081175009012"
-beschreibung: Regelungen zur Gemeindefeuerwehr (Aufgaben, Stärke, Kommandant)
-endpoints:            # Tenancy: leer = universell sichtbar fuer alle
-  - amtsschimmel
-extensions:           # Themen: leer = immer sichtbar (kein Themen-Filter noetig)
-  - Feuerwehr
----
-## Inhaltsverzeichnis
-§ 1 Aufgaben...
-
-### § 1 Aufgaben
-...
+gueltig_ab: "2023-01-01"        # Inkrafttreten der letzten Änderung (bei konsolid. Fassungen)
+stand: "2023-01-01"
+beschreibung: Kurzbeschreibung für Catalog (1–2 Sätze)
+url: https://...
+quelle: GBl. BW 2023, S. 12
 ```
 
-**Heading-Konvention:** Jedes `###`-Heading ist eine abrufbare Section (§, Artikel, Anhang, numerischer Abschnitt, generischer Text). `##`-Headings sind Strukturelemente und landen im Body der nächsten `###`-Section.
+### Tenancy / Extensions (nur Haupt-DB)
 
-**Section-Typen** (`section_type`-Feld in der DB):
+```yaml
+endpoints:        # Leer = universell sichtbar. Gesetzt = nur für diese Deployments sichtbar
+  - brandmeister
+extensions:       # Leer = immer sichtbar. Gesetzt = nur wenn dieser Filter aktiv
+  - Feuerwehr
+```
 
-| Wert | Bedingung | Beispiel |
-|------|-----------|---------|
-| `paragraph` | Default (§ oder generisches Heading) | `§ 1`, `§ 38 a`, `Vorwort` |
-| `artikel` | `Artikel N` oder `Art. N` | `Artikel 6`, `Art. 12a` |
-| `erwaegungsgrund` | `Erwägungs...` oder `EG N` | `EG 5`, `Erwägungsgrund 12` |
+GP1-Datenbank-Quellen brauchen **kein** `endpoints`-Feld — sie sind immer für GP1-Nutzer sichtbar.
+
+### Struktur-Konventionen
+
+```markdown
+## Inhaltsverzeichnis
+§ 1 Titel...           ← Wird als TOC gespeichert
+
+## ERSTER ABSCHNITT    ← Wird in Body der nächsten ###-Section absorbiert
+
+### § 1 Aufgaben       ← Section-Grenze (jedes ### öffnet neue Section)
+Inhalt...
+
+### § 2 Mitglieder
+Inhalt...
+```
+
+**Regel:** Jedes `###`-Heading ist eine abrufbare Section. `##` (außer Inhaltsverzeichnis) landet im Body.
+
+### Section-Typen
+
+| `section_type` | Bedingung | Beispiel |
+|---|---|---|
+| `paragraph` | Default (§ oder generisches Heading) | `§ 1`, `Vorwort` |
+| `artikel` | `Artikel N` / `Art. N` | `Art. 12a` |
+| `erwaegungsgrund` | `Erwägungs...` / `EG N` | `EG 5` |
 | `kapitel` | `Kapitel N` | `Kapitel 1` |
-| `anhang` | `Anhang N` | `Anhang 1`, `Anhang A` |
-| `abschnitt` | Startet mit Ziffer | `1`, `7`, `2.1`, `3.2.1` |
-| `eintrag` | Fallback (keine `###`-Headings) | `Nr. 1 Gebührenposition` |
+| `anhang` | `Anhang N` | `Anhang A` |
+| `abschnitt` | Startet mit Ziffer | `1`, `2.1`, `3.2.1` |
 
-**§ N a (BW-Stil):** Leerzeichen vor dem Buchstaben-Suffix wird korrekt geparst — `§ 38 a` und `§ 38a` sind beide valide.
+---
+
+## Neues Deployment anlegen
+
+### 1. Environment in `wrangler.jsonc` anlegen
+
+```jsonc
+"mein-deployment": {
+  "name": "mein-worker-name",
+  "d1_databases": [
+    { "binding": "DB", "database_name": "ragsource-db-v2", "database_id": "55d4deda-..." }
+    // Optional: zweite DB für GP1
+    // { "binding": "DB_GP1", "database_name": "mein-gp1-db", "database_id": "..." }
+  ],
+  "kv_namespaces": [{ "binding": "CONFIG", "id": "e0af38b6cee446adb258055e172c8a26" }],
+  "durable_objects": { "bindings": [{ "class_name": "RAGSourceMCPv2", "name": "MCP_OBJECT" }] },
+  "migrations": [{ "new_sqlite_classes": ["RAGSourceMCPv2"], "tag": "v1" }],
+  "unsafe": { "bindings": [{ "type": "ratelimit", "name": "RATE_LIMITER", "namespace_id": "100X", "simple": { "limit": 60, "period": 60 } }] }
+}
+```
+
+### 2. Host in `ENDPOINT_BY_HOST` eintragen (`src/mcp.ts`)
+
+```typescript
+"mcp.meine-domain.de": "mein-endpoint",
+```
+
+### 3. Sources mit Endpoint taggen (Haupt-DB)
+
+```sql
+INSERT INTO source_endpoints (source_id, endpoint) VALUES ('MeineQuelle', 'mein-endpoint');
+```
+
+### 4. Deployen
+
+```bash
+wrangler deploy --env mein-deployment
+```
+
+### 5. GP1-Auth aktivieren (optional)
+
+```bash
+wrangler secret put GP1_TOKEN --env mein-deployment
+wrangler deploy --env mein-deployment
+```
+
+### 6. Custom Domain (Cloudflare Dashboard)
+
+Workers → Deployment → Settings → Domains → Custom Domain eintragen.
 
 ---
 
@@ -161,107 +307,107 @@ extensions:           # Themen: leer = immer sichtbar (kein Themen-Filter noetig
 
 ### Voraussetzungen
 
-- Node.js 20+
-- Wrangler CLI (`npm install -g wrangler`)
-- Cloudflare-Account mit D1-Zugriff
+- Node.js 20+, Wrangler CLI, Cloudflare-Account mit D1
 
-### Lokale Entwicklung
+### Lokal
 
 ```bash
 npm install
-npm run db:init:local
-npm run db:seed:local      # Laedt test-articles/ in lokale DB
-npm run dev                # Startet lokalen Dev-Server auf :8787
+npm run db:init:local       # Schema anlegen
+npm run db:seed:local       # test-articles/ → lokale DB
+npm run dev                 # Dev-Server auf :8787
 ```
 
-### Parser testen
+### Tests
 
 ```bash
-npx tsx scripts/test-parser.ts
+npm test                    # sql-utils Unit-Tests
+npx tsx scripts/test-parser.ts  # Parser-Szenarien
 ```
 
-Prueft den Markdown-Parser gegen 9 Szenarien: plain-numerische Headings, Standard-§, Anhang, generische Headings, `##`/`####` als Body, TOC-Erkennung, Fallback-Parser, Dezimalabschnitte.
-
-### Mit eigenem Content-Repo
+### Produktiv
 
 ```bash
-npm run db:seed:local -- --content-root=../../ragsource-content/regelungsrahmen
+wrangler deploy                           # prod (amtsschimmel.ai)
+wrangler deploy --env lean                # lean (mcp-lean.amtsschimmel.ai)
+wrangler deploy --env paragrafenreiter    # paragrafenreiter.ai
+wrangler deploy --env brandmeister        # brandmeister (public)
+wrangler deploy --env brandmeister-gp1    # brandmeister GP1 (OAuth)
 ```
 
-### Produktiv deployen
+### DB remote befüllen
 
 ```bash
-npm run db:init:remote
-npm run db:seed:remote -- --content-root=../../ragsource-content/regelungsrahmen
-npm run deploy
+node --env-file=.env --import tsx/esm scripts/build-db-v2.ts --remote --skip-gemeinden
+# Incremental:
+node --env-file=.env --import tsx/esm scripts/build-db-v2.ts --remote --incremental
 ```
 
----
-
-## Deployments
-
-| Environment | URL | Besonderheit |
-|-------------|-----|--------------|
-| prod | `mcp.amtsschimmel.ai/mcp` | Standard; alle 4 MCP-Tools aktiv |
-| lean | `mcp-lean.amtsschimmel.ai/mcp` | Kein `RAGSource_query` (`DISABLE_QUERY=true`) |
-| paragrafenreiter | `mcp.paragrafenreiter.ai/mcp` | Kein Tenancy-Filter (sieht alle Quellen) |
-| brandmeister | `mcp.brandmeister.ai/mcp` | Öffentlich; Endpoint-Filter auf `brandmeister` |
-| brandmeister-gp1 | `mcp-gp1.brandmeister.ai/mcp` | OAuth 2.0 (`GP1_TOKEN`); Dual-DB (`ragsource-db-v2` + `brandmeister-gp1`) |
-
-`prod`, `lean`, `paragrafenreiter` und `brandmeister` teilen sich die D1-Datenbank `ragsource-db-v2`. `brandmeister-gp1` bindet zusätzlich `brandmeister-gp1` als `DB_GP1`.
-
-### OAuth 2.0 (brandmeister-gp1)
-
-`brandmeister-gp1` implementiert OAuth 2.0 Authorization Code Flow mit PKCE. Claude.ai initiiert den Flow automatisch beim Hinzufügen des MCP-Servers — ein externes Fenster öffnet sich, der Nutzer gibt den GP1-Token ein.
-
-Endpunkte: `/.well-known/oauth-authorization-server`, `/oauth/register`, `/oauth/authorize`, `/oauth/token`.
-
-Secret setzen: `wrangler secret put GP1_TOKEN --env brandmeister-gp1`
-
-## GitHub Actions (automatisches Deploy)
-
-Bei Push auf `main` in diesem Repo:
-
-1. Checkout Server-Code (+ Content-Repo bei Schema-Aenderung)
-2. Tests ausfuehren (`npm test`)
-3. Bei `schema.sql`-Aenderung: D1-Datenbank vollstaendig neu bauen
-4. `wrangler deploy` (prod), `wrangler deploy --env lean`, `wrangler deploy --env paragrafenreiter`, `wrangler deploy --env brandmeister`, `wrangler deploy --env brandmeister-gp1`
-5. Health-Check gegen `/api/health`
-
-Bei `repository_dispatch` vom Content-Repo (Event: `content-updated-v2`):
-
-1. Checkout Server-Code + Content-Repo
-2. `build-db-v2.ts` baut nur die DB neu (Worker bleibt unveraendert)
-
-Benoetigt zwei Secrets im Repo:
-- `CLOUDFLARE_API_TOKEN` -- Cloudflare API Token mit Worker + D1 Rechten
-- `CLOUDFLARE_ACCOUNT_ID` -- Cloudflare Account ID
-- `CONTENT_PAT` -- GitHub Fine-Grained PAT (Read auf ragsource-content, nur bei Schema-Aenderung)
+`.env` benötigt: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`
 
 ---
 
 ## MCP-Integration
+
+### Claude Web
+
+Settings → Integrations → Add MCP Server → URL eingeben.
+
+**Ohne Auth** (public):
+```
+https://mcp.amtsschimmel.ai/mcp
+```
+
+**Mit OAuth** (GP1):
+```
+https://mcp-gp1.brandmeister.ai/mcp
+```
+→ Claude Web startet automatisch den OAuth-Flow. Zugangscode = GP1_TOKEN-Wert.
 
 ### Claude Desktop / Claude Code
 
 ```json
 {
   "mcpServers": {
-    "ragsource": {
-      "url": "https://ragsource-api-v2.ragsource.workers.dev/mcp"
+    "amtsschimmel": {
+      "url": "https://mcp.amtsschimmel.ai/mcp"
+    },
+    "brandmeister-gp1": {
+      "url": "https://mcp-gp1.brandmeister.ai/mcp",
+      "headers": {
+        "Authorization": "Bearer <GP1_TOKEN>"
+      }
     }
   }
 }
 ```
 
-### Claude.ai (Web)
+---
 
-Settings → Integrations → MCP-Server hinzufuegen → URL eingeben.
+## GP1-Content-Pipeline
+
+Vertrauliche Inhalte kommen aus dem privaten Repo `chrtrb/brandmeister-gp1`.
+Bei Push auf `main` (Änderungen in `content/`) deployt GitHub Actions automatisch in die `brandmeister-gp1` D1.
+
+Manueller Full-Rebuild: Actions → "Deploy GP1 Content to D1" → Run workflow → `full_rebuild: true`.
+
+---
+
+## GitHub Actions (ragsource-server)
+
+Benötigte Secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CONTENT_PAT`
+
+Bei Push auf `main`:
+1. Tests (`npm test`)
+2. Bei `schema.sql`-Änderung: D1 neu bauen
+3. `wrangler deploy` für prod, lean, paragrafenreiter
+4. Health-Check `/api/health`
+
+Bei `repository_dispatch` (Event `content-updated-v2`) vom Content-Repo:
+1. Nur DB-Rebuild, kein Worker-Deploy
 
 ---
 
 ## Lizenz
 
-MIT Lizenz fuer Code und Skripte -- siehe [LICENSE](LICENSE)
-
-Powered by [RAGSource](https://github.com/ragsource-ai/ragsource-server)
+MIT — Code und Skripte. Powered by [RAGSource](https://github.com/ragsource-ai/ragsource-server)
