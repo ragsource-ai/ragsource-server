@@ -147,6 +147,106 @@
           }
         ]
       }
+    },
+
+    // -----------------------------------------------------------------------
+    // brandmeister Public: nur DB_PUBLIC, kein Auth.
+    // Deploy: wrangler deploy --env brandmeister
+    // URL:    mcp.brandmeister.ai (Custom Domain in CF-Dashboard setzen)
+    // Endpoint-Filter: "brandmeister" (via ENDPOINT_BY_HOST in mcp.ts)
+    // -----------------------------------------------------------------------
+    "brandmeister": {
+      "name": "brandmeister-worker",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "ragsource-db-v2",
+          "database_id": "55d4deda-60c5-4b70-a6d1-2b76f43e5715"
+        }
+      ],
+      "kv_namespaces": [
+        {
+          "binding": "CONFIG",
+          "id": "e0af38b6cee446adb258055e172c8a26"
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "class_name": "RAGSourceMCPv2",
+            "name": "MCP_OBJECT"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "new_sqlite_classes": ["RAGSourceMCPv2"],
+          "tag": "v1"
+        }
+      ],
+      "unsafe": {
+        "bindings": [
+          {
+            "type": "ratelimit",
+            "name": "RATE_LIMITER",
+            "namespace_id": "1004",
+            "simple": { "limit": 60, "period": 60 }
+          }
+        ]
+      }
+    },
+
+    // -----------------------------------------------------------------------
+    // brandmeister GP1: DB_PUBLIC + DB_GP1, Bearer Token Auth.
+    // Deploy: wrangler deploy --env brandmeister-gp1
+    // URL:    mcp-gp1.brandmeister.ai (Custom Domain in CF-Dashboard setzen)
+    // Secret: wrangler secret put GP1_TOKEN --env brandmeister-gp1
+    // DB_GP1 anlegen: wrangler d1 create brandmeister-gp1 → ID eintragen
+    // -----------------------------------------------------------------------
+    "brandmeister-gp1": {
+      "name": "brandmeister-worker-gp1",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "ragsource-db-v2",
+          "database_id": "55d4deda-60c5-4b70-a6d1-2b76f43e5715"
+        },
+        {
+          "binding": "DB_GP1",
+          "database_name": "brandmeister-gp1",
+          "database_id": "PLACEHOLDER_GP1"   // wrangler d1 create brandmeister-gp1
+        }
+      ],
+      "kv_namespaces": [
+        {
+          "binding": "CONFIG",
+          "id": "e0af38b6cee446adb258055e172c8a26"
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "class_name": "RAGSourceMCPv2",
+            "name": "MCP_OBJECT"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "new_sqlite_classes": ["RAGSourceMCPv2"],
+          "tag": "v1"
+        }
+      ],
+      "unsafe": {
+        "bindings": [
+          {
+            "type": "ratelimit",
+            "name": "RATE_LIMITER",
+            "namespace_id": "1005",
+            "simple": { "limit": 60, "period": 60 }
+          }
+        ]
+      }
     }
   }
 }

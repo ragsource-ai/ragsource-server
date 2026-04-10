@@ -220,6 +220,8 @@ const ENDPOINT_BY_HOST: Record<string, string> = {
   "mcp.amtsschimmel.ai": "amtsschimmel",
   "mcp-lean.amtsschimmel.ai": "amtsschimmel",
   "mcp.paragrafenreiter.ai": "all",
+  "mcp.brandmeister.ai": "brandmeister",
+  "mcp-gp1.brandmeister.ai": "brandmeister",
 };
 
 /** Gibt den Endpoint-Slug des aktuellen Hosts zurück. */
@@ -427,8 +429,30 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           .bind(...geoFilter.params, ...endpointFilter.params, ...extensionsFilter.params)
           .all<CatalogRow>();
 
-        const sources = result.results ?? [];
-        const sorted = sortByEbene(sources);
+        const publicSources = result.results ?? [];
+
+        // Dual-DB: GP1-Quellen transparent hinzufügen (kein Endpoint-/Extensions-Filter nötig —
+        // alle GP1-Inhalte sind per Definition für dieses Deployment sichtbar).
+        let allSources = [...publicSources];
+        if (this.env.DB_GP1) {
+          const gp1Sql = `
+            SELECT s.id, s.titel, s.ebene, s.rechtsrang, s.size_class, s.beschreibung,
+                   EXISTS(SELECT 1 FROM source_tocs t WHERE t.source_id = s.id) AS toc_available
+            FROM sources s
+            WHERE ${geoFilter.sql}
+            ORDER BY s.ebene, s.titel
+          `;
+          const gp1Result = await this.env.DB_GP1
+            .prepare(gp1Sql)
+            .bind(...geoFilter.params)
+            .all<CatalogRow>();
+          const existingIds = new Set(publicSources.map((s) => s.id));
+          for (const s of gp1Result.results ?? []) {
+            if (!existingIds.has(s.id)) allSources.push(s);
+          }
+        }
+
+        const sorted = sortByEbene(allSources);
 
         // Catalog-Einträge als kompakte Arrays: [id, titel, rang, size, toc, hint]
         const sizeMap: Record<string, string> = { small: "S", medium: "M", large: "L" };
@@ -525,53 +549,45 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         const targetLevel = level ?? "gesamt";
         const ph = sourceIds.map(() => "?").join(", ");
 
-        // 1. Alle Quellen in einem Query laden
-        const sourcesResult = await db
-          .prepare(
-            `SELECT id, titel, kurzbezeichnung, size_class, section_count FROM sources WHERE id IN (${ph})`,
-          )
-          .bind(...sourceIds)
-          .all<Pick<Source, "id" | "titel" | "kurzbezeichnung" | "size_class" | "section_count">>();
-        const sourceMap = new Map(
-          (sourcesResult.results ?? []).map((s) => [s.id, s]),
-        );
+        // Hilfsfunktion: Sources, TOCs und Sections für eine DB laden
+        type SourceRow = Pick<Source, "id" | "titel" | "kurzbezeichnung" | "size_class" | "section_count">;
+        const loadFromDb = async (targetDb: D1Database, ids: string[]) => {
+          const p = ids.map(() => "?").join(", ");
+          const [srcRes, tocRes] = await Promise.all([
+            targetDb.prepare(`SELECT id, titel, kurzbezeichnung, size_class, section_count FROM sources WHERE id IN (${p})`).bind(...ids).all<SourceRow>(),
+            targetDb.prepare(`SELECT source_id, content FROM source_tocs WHERE source_id IN (${p}) AND toc_level = ?`).bind(...ids, targetLevel).all<{ source_id: string; content: string }>(),
+          ]);
+          const sMap = new Map((srcRes.results ?? []).map((s) => [s.id, s]));
+          const tMap = new Map((tocRes.results ?? []).map((t) => [t.source_id, t.content]));
 
-        // 2. Alle TOCs in einem Query laden
-        const tocsResult = await db
-          .prepare(
-            `SELECT source_id, content FROM source_tocs WHERE source_id IN (${ph}) AND toc_level = ?`,
-          )
-          .bind(...sourceIds, targetLevel)
-          .all<{ source_id: string; content: string }>();
-        const tocMap = new Map(
-          (tocsResult.results ?? []).map((t) => [t.source_id, t.content]),
-        );
+          const needsSec = ids.filter((id) => { const s = sMap.get(id); return s && !tMap.has(id) && s.size_class !== "large"; });
+          const secMap = new Map<string, SectionResult[]>();
+          if (needsSec.length > 0) {
+            const sp = needsSec.map(() => "?").join(", ");
+            const secRes = await targetDb.prepare(`SELECT source_id, section_ref, heading, body FROM source_sections WHERE source_id IN (${sp}) ORDER BY source_id, sort_order`).bind(...needsSec).all<Pick<SourceSection, "section_ref" | "heading" | "body"> & { source_id: string }>();
+            for (const r of secRes.results ?? []) {
+              if (!secMap.has(r.source_id)) secMap.set(r.source_id, []);
+              secMap.get(r.source_id)!.push({ ref: r.section_ref, heading: r.heading, body: r.body });
+            }
+          }
+          return { sMap, tMap, secMap };
+        };
 
-        // 3. Für small/medium-Quellen ohne TOC: alle §§ in einem Query laden (Fallback)
-        const needsSections = sourceIds.filter((id) => {
-          const src = sourceMap.get(id);
-          return src && !tocMap.has(id) && src.size_class !== "large";
-        });
-        const sectionsMap = new Map<string, SectionResult[]>();
-        if (needsSections.length > 0) {
-          const secPh = needsSections.map(() => "?").join(", ");
-          const secResult = await db
-            .prepare(
-              `SELECT source_id, section_ref, heading, body FROM source_sections WHERE source_id IN (${secPh}) ORDER BY source_id, sort_order`,
-            )
-            .bind(...needsSections)
-            .all<Pick<SourceSection, "section_ref" | "heading" | "body"> & { source_id: string }>();
-          for (const r of secResult.results ?? []) {
-            if (!sectionsMap.has(r.source_id)) sectionsMap.set(r.source_id, []);
-            sectionsMap.get(r.source_id)!.push({
-              ref: r.section_ref,
-              heading: r.heading,
-              body: r.body,
-            });
+        // 1. Public DB abfragen
+        const { sMap: sourceMap, tMap: tocMap, secMap: sectionsMap } = await loadFromDb(db, sourceIds);
+
+        // 2. Dual-DB: fehlende IDs in GP1 DB suchen
+        if (this.env.DB_GP1) {
+          const missingIds = sourceIds.filter((id) => !sourceMap.has(id));
+          if (missingIds.length > 0) {
+            const { sMap: gp1Sources, tMap: gp1Tocs, secMap: gp1Sections } = await loadFromDb(this.env.DB_GP1, missingIds);
+            for (const [id, s] of gp1Sources) sourceMap.set(id, s);
+            for (const [id, t] of gp1Tocs) tocMap.set(id, t);
+            for (const [id, secs] of gp1Sections) sectionsMap.set(id, secs);
           }
         }
 
-        // 4. Ergebnisse in der Reihenfolge der Eingabe zusammenbauen
+        // 3. Ergebnisse in der Reihenfolge der Eingabe zusammenbauen
         const results: TocResult[] = sourceIds.map((id) => {
           const source = sourceMap.get(id);
           if (!source) {
@@ -667,13 +683,15 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         let truncated = false;
 
         for (const req of sourceRequests) {
-          // Quell-Metadaten laden (inkl. url für quelle_url in der Response)
-          const source = await db
-            .prepare(
-              "SELECT id, titel, kurzbezeichnung, quelle, url, size_class, section_count FROM sources WHERE id = ?",
-            )
-            .bind(req.source)
-            .first<Pick<Source, "id" | "titel" | "kurzbezeichnung" | "quelle" | "url" | "size_class" | "section_count">>();
+          // Quell-Metadaten laden — public DB zuerst, bei Fehltreffer GP1 DB versuchen
+          type SourceMeta = Pick<Source, "id" | "titel" | "kurzbezeichnung" | "quelle" | "url" | "size_class" | "section_count">;
+          const sourceSql = "SELECT id, titel, kurzbezeichnung, quelle, url, size_class, section_count FROM sources WHERE id = ?";
+          let source = await db.prepare(sourceSql).bind(req.source).first<SourceMeta>();
+          let activeDb: D1Database = db;
+          if (!source && this.env.DB_GP1) {
+            source = await this.env.DB_GP1.prepare(sourceSql).bind(req.source).first<SourceMeta>();
+            if (source) activeDb = this.env.DB_GP1;
+          }
 
           if (!source) {
             results.push({
@@ -688,7 +706,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
 
           if (!req.sections || req.sections.length === 0) {
             // Alle Paragraphen laden (gesamtes Dokument)
-            const all = await db
+            const all = await activeDb
               .prepare(
                 "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? ORDER BY sort_order",
               )
@@ -712,7 +730,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
               const normalized = normalizeSectionRef(rawRef);
 
               // 1. Exakter Match (voller Titel)
-              let row = await db
+              let row = await activeDb
                 .prepare(
                   "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? AND section_ref = ? LIMIT 1",
                 )
@@ -724,7 +742,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
               if (!row) {
                 const shortRef = extractSectionRef(normalized);
                 if (shortRef && shortRef !== normalized) {
-                  row = await db
+                  row = await activeDb
                     .prepare(
                       "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? AND section_ref = ? LIMIT 1",
                     )
@@ -738,7 +756,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
               //    rekursiven Pattern-Matching-Algorithmus von LIKE → kein D1-Komplexitätslimit
               //    bei langen Unicode-Strings (Umlaute, §, –).
               if (!row) {
-                row = await db
+                row = await activeDb
                   .prepare(
                     "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? AND INSTR(section_ref, ?) > 0 LIMIT 1",
                   )
@@ -879,29 +897,39 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           LIMIT 20
         `;
 
+        type FtsRow = { section_ref: string; heading: string | null; body: string; source_id: string; titel: string; ebene: string | null; size_class: string; rank: number };
+        const toHit = (r: FtsRow): QueryHit => ({ source_id: r.source_id, titel: r.titel, ebene: r.ebene, size_class: r.size_class, section_ref: r.section_ref, heading: r.heading, body: r.body });
+
         const result = await db
           .prepare(sql)
           .bind(ftsQuery, ...geoFilter.params, ...endpointFilter.params, ...extensionsFilter.params)
-          .all<{
-            section_ref: string;
-            heading: string | null;
-            body: string;
-            source_id: string;
-            titel: string;
-            ebene: string | null;
-            size_class: string;
-            rank: number;
-          }>();
+          .all<FtsRow>();
 
-        const hits: QueryHit[] = (result.results ?? []).map((r) => ({
-          source_id: r.source_id,
-          titel: r.titel,
-          ebene: r.ebene,
-          size_class: r.size_class,
-          section_ref: r.section_ref,
-          heading: r.heading,
-          body: r.body,
-        }));
+        const publicHits = (result.results ?? []).map(toHit);
+
+        // Dual-DB: GP1 FTS — nur Geo-Filter (kein Endpoint-/Extensions-Filter nötig)
+        let allHits = publicHits;
+        if (this.env.DB_GP1) {
+          const gp1Sql = `
+            SELECT ss.section_ref, ss.heading, ss.body,
+                   s.id AS source_id, s.titel, s.ebene, s.size_class,
+                   bm25(sections_fts) AS rank
+            FROM sections_fts
+            JOIN source_sections ss ON sections_fts.rowid = ss.rowid
+            JOIN sources s ON ss.source_id = s.id
+            WHERE sections_fts MATCH ?
+              AND ${geoFilter.sql}
+            ORDER BY rank
+            LIMIT 20
+          `;
+          const gp1Result = await this.env.DB_GP1.prepare(gp1Sql).bind(ftsQuery, ...geoFilter.params).all<FtsRow>();
+          const gp1Hits = (gp1Result.results ?? []).map(toHit);
+          const seen = new Set(publicHits.map((h) => `${h.source_id}::${h.section_ref}`));
+          const newHits = gp1Hits.filter((h) => !seen.has(`${h.source_id}::${h.section_ref}`));
+          allHits = [...publicHits, ...newHits].slice(0, 20);
+        }
+
+        const hits = allHits;
 
         const geoInfo = geo
           ? {

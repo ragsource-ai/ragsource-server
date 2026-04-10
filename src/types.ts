@@ -10,11 +10,15 @@ export interface RateLimiter {
 
 export interface Env {
   DB: D1Database;
+  /** Zweite D1-Datenbank für GP1-Deployments (private Inhalte). Nur gebunden wenn ENDPOINT_GP1=true. */
+  DB_GP1?: D1Database;
   MCP_OBJECT: DurableObjectNamespace;
   CONFIG: KVNamespace;
   RATE_LIMITER: RateLimiter;
   /** Wenn "true": RAGSource_query wird nicht registriert (Compliance-Modus) */
   DISABLE_QUERY?: string;
+  /** Bearer Token für GP1-Auth. Gesetzt → Auth Guard aktiv. Als Wrangler Secret hinterlegen. */
+  GP1_TOKEN?: string;
 }
 
 // -----------------------------------------------------------------------

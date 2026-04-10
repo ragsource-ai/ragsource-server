@@ -51,13 +51,23 @@ function createApp() {
       );
     }
 
+    let gp1SourceCount: number | null = null;
+    if (c.env.DB_GP1) {
+      try {
+        const gp1Row = await c.env.DB_GP1.prepare("SELECT COUNT(*) as n FROM sources").first<{ n: number }>();
+        gp1SourceCount = gp1Row?.n ?? 0;
+      } catch { /* GP1 DB nicht erreichbar — ignorieren */ }
+    }
+
     return c.json({
       status: "ok",
       version: "2.0.0",
+      deployment: c.env.GP1_TOKEN ? "gp1" : "public",
       mcp_tools: ["RAGSource_catalog", "RAGSource_toc", "RAGSource_get", "RAGSource_query"],
       db: {
         sources: sourceCount,
         sections: sectionCount,
+        ...(gp1SourceCount !== null && { gp1_sources: gp1SourceCount }),
       },
       timestamp: new Date().toISOString(),
     });
@@ -85,7 +95,39 @@ export default {
 
     // MCP-Endpunkt → McpAgent (Durable Objects)
     if (url.pathname === "/mcp" || url.pathname.startsWith("/mcp/")) {
-      // Rate-Limiting: max. 60 Requests/Minute pro IP (Preflight ausgenommen)
+      // CORS-Preflight — vor Auth, damit Browser CORS-Header entdecken können
+      if (request.method === "OPTIONS") {
+        return new Response(null, {
+          status: 204,
+          headers: {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, mcp-session-id",
+            "Access-Control-Expose-Headers": "mcp-session-id",
+            "Access-Control-Max-Age": "86400",
+          },
+        });
+      }
+
+      // Auth Guard — nur aktiv wenn GP1_TOKEN als Secret gesetzt ist
+      if (env.GP1_TOKEN) {
+        const auth = request.headers.get("Authorization") ?? "";
+        if (auth !== `Bearer ${env.GP1_TOKEN}`) {
+          return new Response(
+            JSON.stringify({ error: "Unauthorized", hint: "Bearer Token erforderlich." }),
+            {
+              status: 401,
+              headers: {
+                "Content-Type": "application/json",
+                "WWW-Authenticate": 'Bearer realm="ragsource-gp1"',
+                "Access-Control-Allow-Origin": "*",
+              },
+            },
+          );
+        }
+      }
+
+      // Rate-Limiting: max. 60 Requests/Minute pro IP
       if (request.method !== "OPTIONS") {
         const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
         const { success } = await env.RATE_LIMITER.limit({ key: ip });
@@ -102,20 +144,6 @@ export default {
             },
           );
         }
-      }
-
-      // CORS-Preflight (ChatGPT, Cursor, andere Browser-Clients)
-      if (request.method === "OPTIONS") {
-        return new Response(null, {
-          status: 204,
-          headers: {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization, mcp-session-id",
-            "Access-Control-Expose-Headers": "mcp-session-id",
-            "Access-Control-Max-Age": "86400",
-          },
-        });
       }
 
       // MCP-Request durchleiten + CORS-Header anhängen
