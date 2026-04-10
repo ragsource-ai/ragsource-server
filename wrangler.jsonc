@@ -214,7 +214,7 @@
         {
           "binding": "DB_GP1",
           "database_name": "brandmeister-gp1",
-          "database_id": "PLACEHOLDER_GP1"   // wrangler d1 create brandmeister-gp1
+          "database_id": "2c876631-17e8-4b9e-899d-a59c17fe791b"
         }
       ],
       "kv_namespaces": [
