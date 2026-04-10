@@ -5,6 +5,29 @@ Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [2.6.0] — 2026-04-09
+
+### Hinzugefügt
+- **Drei Deployments**: Prod (`mcp.amtsschimmel.ai`), Lean (`mcp-lean.amtsschimmel.ai`, kein `RAGSource_query`), Paragrafenreiter (`mcp.paragrafenreiter.ai`, sieht alle Quellen).
+- **`DISABLE_QUERY`-Flag**: Wenn auf `"true"`, wird `RAGSource_query` nicht registriert (Compliance-Modus für Testkunden).
+- **`?extensions=`-URL-Parameter**: Kommagetrennte Themen-Filter (z.B. `?extensions=Feuerwehr,Arbeitsrecht`), die den DO vorab konfigurieren — analog zu `?geo=`.
+- **`extensions`-Tool-Parameter** in `RAGSource_catalog`, `RAGSource_toc`, `RAGSource_query`: ersetzen den alten `sammlungen`-Parameter.
+- **`ENDPOINT_BY_HOST`-Mapping**: Drei Einträge (`mcp.amtsschimmel.ai` → `amtsschimmel`, `mcp-lean.amtsschimmel.ai` → `amtsschimmel`, `mcp.paragrafenreiter.ai` → `all`). `"all"` deaktiviert den Tenancy-Filter.
+- **Wrangler-Environments**: `--env lean` und `--env paragrafenreiter` in `wrangler.jsonc` mit allen Bindings explizit deklariert.
+- **CI/CD**: `deploy.yml` deployt jetzt alle drei Environments nach dem Prod-Deploy.
+
+### Geändert
+- **Zwei-Filter-Modell**: `buildSammlungFilter()` ersetzt durch `buildEndpointFilter()` (Tenancy, mandatory AND) + `buildExtensionsFilter()` (Themen, optional OR).
+- **DB-Schema**: `source_sammlungen`/`source_projekte` → zwei getrennte Tabellen `source_endpoints` (Tenancy) und `source_extensions` (Themen).
+- **Frontmatter-Felder**: `projekte`/`sammlungen` (deprecated, Legacy-Fallback bleibt) → `endpoints` (Tenancy-Array) + `extensions` (Themen-Array). Leere Arrays = universell sichtbar.
+- **`projekt`-Parameter** in Tool-Definitionen: als No-op-Legacy behalten (kein Breaking Change).
+
+### Behoben
+- Wrangler-Environments erben Bindings nicht automatisch — alle Bindings in jeder `env`-Sektion explizit deklariert (war Ursache für „kv_namespaces exists at the top level, but not on env.lean"-Warnungen).
+- Rate-Limiter `namespace_id` pro Environment eindeutig: 1001 (prod), 1002 (lean), 1003 (paragrafenreiter).
+
+---
+
 ## [2.5.0] — 2026-04-04
 
 ### Geändert
@@ -113,6 +136,7 @@ Erster stabiler Release des Agentic RAG v2-Systems. Vollständige Neuentwicklung
 
 ---
 
+[2.6.0]: https://github.com/ragsource-ai/ragsource-server/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/ragsource-ai/ragsource-server/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/ragsource-ai/ragsource-server/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/ragsource-ai/ragsource-server/compare/v2.2.0...v2.3.0

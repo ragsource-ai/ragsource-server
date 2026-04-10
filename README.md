@@ -2,10 +2,11 @@
 
 Cloudflare Worker mit D1-Datenbank (SQLite + FTS5), der kommunales Verwaltungswissen als agentic RAG-System bereitstellt -- erreichbar ueber MCP (Model Context Protocol).
 
-**Live:** `https://ragsource-api-v2.ragsource.workers.dev`
-**MCP-Endpunkt:** `https://ragsource-api-v2.ragsource.workers.dev/mcp`
-**amtsschimmel.ai:** `https://mcp.amtsschimmel.ai/mcp?geo=<ARS>&rolle=<rolle>`
-**Status:** v2 Agentic RAG (261 Quellen, abschnittsgranular)
+**Live (prod):** `https://ragsource-api-v2.ragsource.workers.dev/mcp`
+**amtsschimmel.ai:** `https://mcp.amtsschimmel.ai/mcp?geo=<ARS>`
+**amtsschimmel lean:** `https://mcp-lean.amtsschimmel.ai/mcp?geo=<ARS>` (kein `RAGSource_query`)
+**paragrafenreiter.ai:** `https://mcp.paragrafenreiter.ai/mcp?geo=<ARS>&extensions=<Thema>`
+**Status:** v2 Agentic RAG (261 Quellen, abschnittsgranular, 3 Deployments)
 
 ---
 
@@ -97,7 +98,16 @@ RAGSource_catalog (geo=...) → liefert Quellen mit size_class
 | Parameter | Typ | Beschreibung |
 |-----------|-----|--------------|
 | `geo` | string | ARS-Code oder Klarname/Slug. ARS-Laenge bestimmt Ebene: `08` (Land), `08117` (Kreis), `081175009` (Verband), `081175009012` (Gemeinde). **"Nur aufwaerts":** Verbands-Anfragen zeigen nur Verband/Kreis/Land/Bund, keine Gemeinde-Quellen |
-| `projekt` | string | Projekt-Slug fuer Mandanten-Filter (z.B. `amtsschimmel`) |
+| `extensions` | string | Kommagetrennte Themen-Filter (z.B. `Feuerwehr,Arbeitsrecht`). Quellen ohne Extensions-Eintrag sind immer sichtbar. Mehrere Extensions = OR-Verknuepfung |
+
+URL-Parameter (vorab-Konfiguration des DO via Custom Domain):
+```
+?geo=081175009012          # ARS der Gemeinde
+?extensions=Feuerwehr      # Nur Feuerwehr-Quellen + universelle Quellen
+?geo=081175009&extensions=Feuerwehr,Arbeitsrecht
+```
+
+Tenancy (Endpoint-Filter) wird automatisch aus dem `Host`-Header der Custom Domain abgeleitet — kein URL-Parameter noetig.
 
 ---
 
@@ -115,6 +125,10 @@ kreis_ars: "08117"
 verband_ars: "081175009"
 gemeinde_ars: "081175009012"
 beschreibung: Regelungen zur Gemeindefeuerwehr (Aufgaben, Stärke, Kommandant)
+endpoints:            # Tenancy: leer = universell sichtbar fuer alle
+  - amtsschimmel
+extensions:           # Themen: leer = immer sichtbar (kein Themen-Filter noetig)
+  - Feuerwehr
 ---
 ## Inhaltsverzeichnis
 § 1 Aufgaben...
@@ -182,14 +196,25 @@ npm run deploy
 
 ---
 
+## Deployments
+
+| Environment | URL | Besonderheit |
+|-------------|-----|--------------|
+| prod | `mcp.amtsschimmel.ai/mcp` | Standard; alle 4 MCP-Tools aktiv |
+| lean | `mcp-lean.amtsschimmel.ai/mcp` | Kein `RAGSource_query` (`DISABLE_QUERY=true`) |
+| paragrafenreiter | `mcp.paragrafenreiter.ai/mcp` | Kein Tenancy-Filter (sieht alle Quellen) |
+
+Alle Environments teilen sich dieselbe D1-Datenbank (`ragsource-db-v2`).
+
 ## GitHub Actions (automatisches Deploy)
 
 Bei Push auf `main` in diesem Repo:
 
-1. Checkout Server-Code + Content-Repo
-2. `build-db-v2.ts` baut die D1-Datenbank neu
-3. `wrangler deploy` deployt den Worker
-4. Health-Check gegen `/api/health`
+1. Checkout Server-Code (+ Content-Repo bei Schema-Aenderung)
+2. Tests ausfuehren (`npm test`)
+3. Bei `schema.sql`-Aenderung: D1-Datenbank vollstaendig neu bauen
+4. `wrangler deploy` (prod), `wrangler deploy --env lean`, `wrangler deploy --env paragrafenreiter`
+5. Health-Check gegen `/api/health`
 
 Bei `repository_dispatch` vom Content-Repo (Event: `content-updated-v2`):
 
@@ -199,6 +224,7 @@ Bei `repository_dispatch` vom Content-Repo (Event: `content-updated-v2`):
 Benoetigt zwei Secrets im Repo:
 - `CLOUDFLARE_API_TOKEN` -- Cloudflare API Token mit Worker + D1 Rechten
 - `CLOUDFLARE_ACCOUNT_ID` -- Cloudflare Account ID
+- `CONTENT_PAT` -- GitHub Fine-Grained PAT (Read auf ragsource-content, nur bei Schema-Aenderung)
 
 ---
 

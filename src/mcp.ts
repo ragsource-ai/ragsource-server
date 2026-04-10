@@ -106,7 +106,9 @@ function buildEndpointFilter(mandatory: string | undefined): SqlFragment {
 }
 
 /**
- * Extension-Filter (Themen): Quellen ohne Extension-Einträge sind immer sichtbar.
+ * Extension-Filter (Themen): Quellen ohne Extension-Einträge sind NICHT sichtbar,
+ * wenn ein Filter aktiv ist.
+ * Extension "universal" → immer sichtbar (wird automatisch hinzugefügt).
  * Leeres Array → kein Filter (alles durch).
  * Mehrere Werte → OR-verknüpft.
  */
@@ -114,13 +116,13 @@ function buildExtensionsFilter(userFilters: string[]): SqlFragment {
   if (userFilters.length === 0) {
     return { sql: "1=1", params: [] };
   }
-  const ph = userFilters.map(() => "?").join(", ");
+  const effectiveFilters = [...new Set([...userFilters, "universal"])];
+  const ph = effectiveFilters.map(() => "?").join(", ");
   return {
     sql: `(
-      NOT EXISTS (SELECT 1 FROM source_extensions sx WHERE sx.source_id = s.id)
-      OR EXISTS (SELECT 1 FROM source_extensions sx WHERE sx.source_id = s.id AND sx.extension IN (${ph}))
+      EXISTS (SELECT 1 FROM source_extensions sx WHERE sx.source_id = s.id AND sx.extension IN (${ph}))
     )`,
-    params: userFilters,
+    params: effectiveFilters,
   };
 }
 
@@ -192,26 +194,18 @@ function buildFtsQuery(input: string): string | null {
 const INSTRUCTIONS_DEFAULT =
   "RAGSource — Agentic RAG Framework.\n" +
   "\n" +
-  "Workflow: RAGSource_catalog → RAGSource_toc (medium/large) → RAGSource_get. " +
-  "RAGSource_query nur als Fallback, wenn Quelle unklar oder Catalog kein Ergebnis liefert.\n" +
+  "Workflow: RAGSource_catalog → RAGSource_toc (M/L) → RAGSource_get.\n" +
+  "RAGSource_query als Alternative wenn: (a) Catalog liefert keine passende Quelle, " +
+  "(b) Thema unklar und Quersuche über viele Quellen sinnvoll. " +
+  "Nicht verwenden, wenn Quelle bereits aus Catalog bekannt — dann toc+get bevorzugen.\n" +
   "\n" +
   "Normenhierarchie: Höherrangiges Recht bricht niederrangiges (z.B. Bundesgesetz > Landesgesetz). " +
   "Bei Konflikten: höherrangige Norm zitieren, Widerspruch benennen.";
 
-/**
- * Kurzbeschreibung für amtsschimmel.ai — ergänzt den Default um den Geo-Kontext.
- * @param geo ARS-Code aus ?geo= URL-Parameter (z.B. "081175009012") oder null
- */
-function buildInstructionsAmtsschimmel(geo: string | null): string {
-  return INSTRUCTIONS_DEFAULT + (geo ? `\nGeo-Kontext: geo="${geo}" — diesen Wert an alle Tools übergeben.` : "");
-}
-
-/** Mappt Projekt-Slugs auf ihre Instructions-Builder-Funktionen */
+/** Mappt Endpoint-Slugs auf Hardcode-Fallback-Builder (greift wenn kein KV-Eintrag vorhanden) */
 type InstructionsBuilder = (geo: string | null) => string;
 
-const INSTRUCTIONS_BUILDERS: Record<string, InstructionsBuilder> = {
-  "amtsschimmel": buildInstructionsAmtsschimmel,
-};
+const INSTRUCTIONS_BUILDERS: Record<string, InstructionsBuilder> = {};
 
 // -----------------------------------------------------------------------
 // Projekt-Erkennung via Host-Header
@@ -321,12 +315,10 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // Endpoint (Tenancy) aus Host ableiten
     const endpoint = ENDPOINT_BY_HOST[this._currentHost];
 
-    // Kurze Instructions bauen: endpoint-spezifischer Builder oder generischer Default.
-    // geo wird als ARS-Code (Raw aus ?geo= URL-Param) direkt übergeben — kein resolveGeo nötig.
-    // sessionGeo nur für Instructions-Text (init-Zeit); Tool-Handler lesen _currentGeo direkt.
-    const sessionGeo = this._currentGeo || null;
-    const builder = endpoint ? INSTRUCTIONS_BUILDERS[endpoint] : undefined;
-    const instructions = builder ? builder(sessionGeo) : INSTRUCTIONS_DEFAULT;
+    // Instructions: KV-Eintrag hat Vorrang vor hardcoded INSTRUCTIONS_DEFAULT.
+    // KV-Key: "instructions:{endpoint}" oder "instructions:default".
+    const kvKey = endpoint ? `instructions:${endpoint}` : "instructions:default";
+    const instructions = (await this.env.CONFIG.get(kvKey)) ?? INSTRUCTIONS_DEFAULT;
 
     this.server = new McpServer(
       { name: "RAGSource", version: "2.0.0" },
@@ -371,11 +363,20 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
       async ({ geo: geoInput, extensions: extensionsInput }) => {
         const db = this.env.DB;
 
-        // KV: Broadcast-Nachricht (Wartung, Updates) + Nicht-konfiguriert-Meldung
-        const [systemMessage, notConfiguredMessage] = await Promise.all([
+        // KV: Broadcast-Nachricht + Nicht-konfiguriert-Meldung
+        // Endpoint-spezifischer Key hat jeweils Vorrang vor globalem Fallback.
+        // Alle Keys parallel laden.
+        const currentEndpoint = resolveMandatoryEndpoint();
+        const smKey = currentEndpoint ? `system_message:${currentEndpoint}` : null;
+        const ncKey = currentEndpoint ? `not_configured_message:${currentEndpoint}` : null;
+        const [smEndpoint, smGlobal, ncEndpoint, ncGlobal] = await Promise.all([
+          smKey ? this.env.CONFIG.get(smKey) : Promise.resolve(null),
           this.env.CONFIG.get("system_message"),
+          ncKey ? this.env.CONFIG.get(ncKey) : Promise.resolve(null),
           this.env.CONFIG.get("not_configured_message"),
         ]);
+        const systemMessage = smEndpoint ?? smGlobal;
+        const notConfiguredMessage = ncEndpoint ?? ncGlobal;
 
         // Geo auflösen; URL-?geo= als Request-Default wenn kein expliziter Parameter.
         // _currentGeo wird per fetch() pro Request gesetzt — robuster als sessionGeo-Closure,
@@ -493,7 +494,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
       "z.B. '§ 6 Aufgaben (Pflichtaufgaben, Mindeststärke)'. " +
       "Bis zu 8 Quellen gleichzeitig (Batch). " +
       "section_ref-Werte aus dem TOC exakt an RAGSource_get übergeben. " +
-      "Kein TOC vorhanden: liefert bei small/medium alle §§ direkt im Feld 'sections'.",
+      "Wenn keine TOC-Datei hinterlegt: small/medium-Quellen liefern alle §§ direkt im Feld 'sections' — RAGSource_get ist dann für diese Quellen nicht mehr nötig.",
       {
         sources: z
           .array(z.string())
@@ -514,8 +515,8 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           .string()
           .optional()
           .describe(
-            "Geo-Kontext (ARS-Code oder Klarname) — wird als Metadaten weitergegeben, " +
-            "beeinflusst nicht die Abfrage (Source-IDs sind bereits geo-gefiltert).",
+            "Geo-Kontext (ARS-Code oder Klarname) — wird akzeptiert, beeinflusst die Abfrage aber nicht. " +
+            "Source-IDs sind bereits durch RAGSource_catalog geo-gefiltert.",
           ),
       },
       { title: "RAGSource toc", readOnlyHint: true, destructiveHint: false },
@@ -642,8 +643,8 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           .string()
           .optional()
           .describe(
-            "Geo-Kontext (ARS-Code oder Klarname) — wird als Metadaten weitergegeben, " +
-            "beeinflusst nicht die Abfrage (Source-IDs sind bereits geo-gefiltert).",
+            "Geo-Kontext (ARS-Code oder Klarname) — wird akzeptiert, beeinflusst die Abfrage aber nicht. " +
+            "Source-IDs sind bereits durch RAGSource_catalog geo-gefiltert.",
           ),
       },
       { title: "RAGSource get", readOnlyHint: true, destructiveHint: false },
@@ -798,9 +799,13 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     if (!this.env.DISABLE_QUERY) this.server.tool(
       "RAGSource_query",
-      "FALLBACK — nur wenn RAGSource_catalog keine passende Quelle liefert oder das Thema unklar ist. " +
-      "FTS5-Volltextsuche über alle indizierten Paragraphen. " +
-      "Liefert Treffer mit source_id und section_ref für gezieltes Nachladen per RAGSource_get.",
+      "FALLBACK / QUERSUCHE — sinnvoll in zwei Situationen: " +
+      "(1) RAGSource_catalog liefert keine eindeutig passende Quelle; " +
+      "(2) Thema unklar oder Begriff soll quer über viele Quellen gleichzeitig gesucht werden " +
+      "(z.B. 'Welche Paragraphen in allen Quellen erwähnen Spielhallen?'). " +
+      "Nicht verwenden, wenn Quelle bereits aus dem Catalog bekannt — dann toc + get bevorzugen. " +
+      "FTS5-Volltextsuche über alle indizierten Paragraphen (max. 20 Treffer). " +
+      "Treffer enthalten source_id und section_ref für gezieltes Nachladen per RAGSource_get.",
       {
         query: z
           .string()

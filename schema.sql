@@ -48,7 +48,8 @@ CREATE INDEX IF NOT EXISTS idx_source_endpoints_endpoint ON source_endpoints(end
 
 -- -----------------------------------------------------------------------
 -- Extension-Zuordnung (Thematische Filter: Arbeitsrecht, Feuerwehr etc.)
--- Leer = immer sichtbar (kein Themen-Filter nötig).
+-- "universal" = immer sichtbar, unabhängig vom aktiven Filter.
+-- Leer = nur sichtbar wenn kein Filter aktiv ist.
 -- -----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS source_extensions (
   source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
