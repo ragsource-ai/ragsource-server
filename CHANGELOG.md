@@ -5,6 +5,19 @@ Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [2.6.2] — 2026-04-11
+
+### Hinzugefügt
+- **OAuth 2.0 Authorization Code Flow** (`src/index.ts`): Vollständiger Standard-Flow für GP1-Authentifizierung. Endpunkte: `/.well-known/oauth-authorization-server` (RFC 8414), `/oauth/register` (Dynamic Client Registration, RFC 7591), `/oauth/authorize` (Token-Eingabe-Formular), `/oauth/token` (Code → Access Token, mit PKCE). Auth-Codes liegen 5 min in CONFIG KV (`oauth_code:<uuid>`).
+- **Deployments `brandmeister` und `brandmeister-gp1`** in `wrangler.jsonc` und CI: `brandmeister` (öffentlich, Endpoint-Filter auf `brandmeister`); `brandmeister-gp1` (OAuth-geschützt, Dual-DB `ragsource-db-v2` + `brandmeister-gp1`).
+- **CI/CD**: `deploy.yml` deployt jetzt alle fünf Environments (`prod`, `lean`, `paragrafenreiter`, `brandmeister`, `brandmeister-gp1`). `deploy.yml` selbst ist als Trigger-Pfad eingetragen.
+
+### Geändert
+- **Extensions-Filter additiv**: Wenn `extensions`-Parameter gesetzt, gilt `(Endpoint-Match) OR (Extension-Match)` statt `AND`. Quellen mit passendem Extension-Tag erscheinen im Catalog/Query auch dann, wenn ihr `endpoints`-Eintrag nicht zum aufrufenden Deployment passt. Betrifft `RAGSource_catalog` und `RAGSource_query`.
+- **`WWW-Authenticate: Bearer`-Header** in 401-Response wiederhergestellt — nötig, damit Claude.ai den OAuth-Flow initiiert.
+
+---
+
 ## [2.6.1] — 2026-04-11
 
 ### Geändert

@@ -6,7 +6,9 @@ Cloudflare Worker mit D1-Datenbank (SQLite + FTS5), der kommunales Verwaltungswi
 **amtsschimmel.ai:** `https://mcp.amtsschimmel.ai/mcp?geo=<ARS>`
 **amtsschimmel lean:** `https://mcp-lean.amtsschimmel.ai/mcp?geo=<ARS>` (kein `RAGSource_query`)
 **paragrafenreiter.ai:** `https://mcp.paragrafenreiter.ai/mcp?geo=<ARS>&extensions=<Thema>`
-**Status:** v2 Agentic RAG (261 Quellen, abschnittsgranular, 3 Deployments)
+**brandmeister.ai:** `https://mcp.brandmeister.ai/mcp` (öffentlich, Endpoint-Filter)
+**brandmeister GP1:** `https://mcp-gp1.brandmeister.ai/mcp` (OAuth 2.0, Dual-DB)
+**Status:** v2 Agentic RAG (261 Quellen, abschnittsgranular, 5 Deployments)
 
 ---
 
@@ -203,8 +205,18 @@ npm run deploy
 | prod | `mcp.amtsschimmel.ai/mcp` | Standard; alle 4 MCP-Tools aktiv |
 | lean | `mcp-lean.amtsschimmel.ai/mcp` | Kein `RAGSource_query` (`DISABLE_QUERY=true`) |
 | paragrafenreiter | `mcp.paragrafenreiter.ai/mcp` | Kein Tenancy-Filter (sieht alle Quellen) |
+| brandmeister | `mcp.brandmeister.ai/mcp` | Öffentlich; Endpoint-Filter auf `brandmeister` |
+| brandmeister-gp1 | `mcp-gp1.brandmeister.ai/mcp` | OAuth 2.0 (`GP1_TOKEN`); Dual-DB (`ragsource-db-v2` + `brandmeister-gp1`) |
 
-Alle Environments teilen sich dieselbe D1-Datenbank (`ragsource-db-v2`).
+`prod`, `lean`, `paragrafenreiter` und `brandmeister` teilen sich die D1-Datenbank `ragsource-db-v2`. `brandmeister-gp1` bindet zusätzlich `brandmeister-gp1` als `DB_GP1`.
+
+### OAuth 2.0 (brandmeister-gp1)
+
+`brandmeister-gp1` implementiert OAuth 2.0 Authorization Code Flow mit PKCE. Claude.ai initiiert den Flow automatisch beim Hinzufügen des MCP-Servers — ein externes Fenster öffnet sich, der Nutzer gibt den GP1-Token ein.
+
+Endpunkte: `/.well-known/oauth-authorization-server`, `/oauth/register`, `/oauth/authorize`, `/oauth/token`.
+
+Secret setzen: `wrangler secret put GP1_TOKEN --env brandmeister-gp1`
 
 ## GitHub Actions (automatisches Deploy)
 
@@ -213,7 +225,7 @@ Bei Push auf `main` in diesem Repo:
 1. Checkout Server-Code (+ Content-Repo bei Schema-Aenderung)
 2. Tests ausfuehren (`npm test`)
 3. Bei `schema.sql`-Aenderung: D1-Datenbank vollstaendig neu bauen
-4. `wrangler deploy` (prod), `wrangler deploy --env lean`, `wrangler deploy --env paragrafenreiter`
+4. `wrangler deploy` (prod), `wrangler deploy --env lean`, `wrangler deploy --env paragrafenreiter`, `wrangler deploy --env brandmeister`, `wrangler deploy --env brandmeister-gp1`
 5. Health-Check gegen `/api/health`
 
 Bei `repository_dispatch` vom Content-Repo (Event: `content-updated-v2`):
