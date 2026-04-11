@@ -27,8 +27,17 @@ import { resolveGeo, type ResolvedGeo, type AmbiguousGeo } from "./engine/normal
 // Geo-Filter für die sources-Tabelle
 // -----------------------------------------------------------------------
 
+/**
+ * Opaque type für hardcodierte SQL-Fragmente.
+ * Zweck: TypeScript-Fehler erzwingen, wenn Benutzereingaben direkt in sql landen.
+ * Alle Benutzerdaten müssen über params fließen, niemals über sql.
+ */
+type SafeSqlStr = string & { readonly _brand: "SafeSqlStr" };
+/** Markiert einen hardcodierten SQL-String als sicher. Nie mit Benutzereingaben verwenden. */
+const s = (sql: string): SafeSqlStr => sql as SafeSqlStr;
+
 interface SqlFragment {
-  sql: string;
+  sql: SafeSqlStr;
   params: (string | null)[];
 }
 
@@ -44,7 +53,7 @@ interface SqlFragment {
  */
 function buildGeoFilter(geo: ResolvedGeo | null): SqlFragment {
   if (!geo) {
-    return { sql: "1=1", params: [] };
+    return { sql: s("1=1"), params: [] };
   }
 
   const conditions: string[] = [];
@@ -83,7 +92,7 @@ function buildGeoFilter(geo: ResolvedGeo | null): SqlFragment {
   }
 
   return {
-    sql: conditions.join(" AND "),
+    sql: s(conditions.join(" AND ")),
     params,
   };
 }
@@ -94,13 +103,13 @@ function buildGeoFilter(geo: ResolvedGeo | null): SqlFragment {
  */
 function buildEndpointFilter(mandatory: string | undefined): SqlFragment {
   if (!mandatory || mandatory === "all") {
-    return { sql: "1=1", params: [] };
+    return { sql: s("1=1"), params: [] };
   }
   return {
-    sql: `(
+    sql: s(`(
       NOT EXISTS (SELECT 1 FROM source_endpoints se WHERE se.source_id = s.id)
       OR EXISTS (SELECT 1 FROM source_endpoints se WHERE se.source_id = s.id AND se.endpoint = ?)
-    )`,
+    )`),
     params: [mandatory],
   };
 }
@@ -114,14 +123,14 @@ function buildEndpointFilter(mandatory: string | undefined): SqlFragment {
  */
 function buildExtensionsFilter(userFilters: string[]): SqlFragment {
   if (userFilters.length === 0) {
-    return { sql: "1=1", params: [] };
+    return { sql: s("1=1"), params: [] };
   }
   const effectiveFilters = [...new Set([...userFilters, "universal"])];
   const ph = effectiveFilters.map(() => "?").join(", ");
   return {
-    sql: `(
+    sql: s(`(
       EXISTS (SELECT 1 FROM source_extensions sx WHERE sx.source_id = s.id AND sx.extension IN (${ph}))
-    )`,
+    )`),
     params: effectiveFilters,
   };
 }
@@ -336,6 +345,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
       {
         geo: z
           .string()
+          .max(100)
           .optional()
           .describe(
             "ARS-Code (2/5/9/12 Stellen) oder Gemeindename. " +
@@ -391,7 +401,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         const geoUnresolved = effectiveGeo !== null && geo === null;
         // Fallback: nur EU + Bund (alle ARS-Spalten IS NULL) — kein Land bekannt, daher kein Land-Filter
         const GEO_BUND_ONLY: SqlFragment = {
-          sql: "s.land_ars IS NULL AND s.kreis_ars IS NULL AND s.verband_ars IS NULL AND s.gemeinde_ars IS NULL",
+          sql: s("s.land_ars IS NULL AND s.kreis_ars IS NULL AND s.verband_ars IS NULL AND s.gemeinde_ars IS NULL"),
           params: [],
         };
         const geoFilter = geoUnresolved ? GEO_BUND_ONLY : buildGeoFilter(geo);
@@ -825,6 +835,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           .describe("Suchanfrage in natürlicher Sprache"),
         geo: z
           .string()
+          .max(100)
           .optional()
           .describe(
             "Geo-Filter: ARS-Code (2/5/9/12 Stellen) oder Klarname. " +

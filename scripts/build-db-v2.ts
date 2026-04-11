@@ -34,7 +34,7 @@ import {
 import { join, relative, basename } from "path";
 import { createHash } from "crypto";
 import matter from "gray-matter";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { esc, buildConcatTree } from "./sql-utils.js";
 
 // -----------------------------------------------------------------------
@@ -63,7 +63,8 @@ const WRANGLER_CONFIG = "wrangler.jsonc";
 const BATCH_SIZE = 80; // Statements pro Batch
 
 // D1 REST API (für --remote, ersetzt wrangler-CLI-Spawn pro Batch)
-const D1_DB_ID = "55d4deda-60c5-4b70-a6d1-2b76f43e5715"; // aus wrangler.jsonc
+// ID aus Umgebungsvariable; Fallback ist der Wert aus wrangler.jsonc (nur für lokale Ausführung).
+const D1_DB_ID = process.env.CLOUDFLARE_D1_DB_ID ?? "55d4deda-60c5-4b70-a6d1-2b76f43e5715";
 const CF_API_BASE = "https://api.cloudflare.com/client/v4";
 const API_CONCURRENCY = 5; // max. parallele D1-API-Anfragen
 
@@ -116,16 +117,16 @@ const schemaDir = join(import.meta.dirname!, "..");
 
 // esc() und buildConcatTree() sind in scripts/sql-utils.ts definiert (importiert oben).
 
-/** Schätzt Token-Anzahl: 1 Token ≈ 4 Zeichen (englisch/deutsch) */
+/** Schätzt Token-Anzahl: 1 Token ≈ 3,5 Zeichen (deutsch, mit Umlauten und Komposita) */
 function estimateTokens(text: string): number {
-  return Math.round(text.length / 4);
+  return Math.round(text.length / 3.5);
 }
 
-/** Führt einen Shell-Befehl aus, mit bis zu `retries` Versuchen bei Fehler. */
-function execWithRetry(cmd: string, opts: Parameters<typeof execSync>[1], retries = 3): void {
+/** Führt einen Befehl aus, mit bis zu `retries` Versuchen bei Fehler. */
+function execWithRetry(file: string, args: string[], opts: Parameters<typeof execFileSync>[2], retries = 3): void {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      execSync(cmd, opts);
+      execFileSync(file, args, opts);
       return;
     } catch (e) {
       if (attempt === retries) throw e;
@@ -183,7 +184,7 @@ async function fetchD1Batch(statements: SqlStmt[]): Promise<void> {
         });
         const data = (await res.json()) as { success: boolean; errors: { message: string }[] };
         if (!res.ok || !data.success) {
-          throw new Error(`D1 API HTTP ${res.status}: ${JSON.stringify(data.errors ?? data)}`);
+          throw new Error(`D1 API HTTP ${res.status}: ${JSON.stringify(data.errors ?? [])}`);
         }
         return;
       } catch (e) {
@@ -326,7 +327,7 @@ async function queryD1Remote(sql: string): Promise<Record<string, unknown>[]> {
         errors?: { message: string }[];
       };
       if (!res.ok || !data.success) {
-        throw new Error(`D1 Query-Fehler HTTP ${res.status}: ${JSON.stringify(data.errors ?? data)}`);
+        throw new Error(`D1 Query-Fehler HTTP ${res.status}: ${JSON.stringify(data.errors ?? [])}`);
       }
       return data.result?.[0]?.results ?? [];
     } catch (e) {
@@ -346,8 +347,9 @@ function queryD1Local(sql: string): Record<string, unknown>[] {
   const queryFile = join(schemaDir, ".build-query-v2.sql");
   writeFileSync(queryFile, sql, "utf-8");
   try {
-    const out = execSync(
-      `npx wrangler d1 execute ${DB_NAME} --local --config=${WRANGLER_CONFIG} --file=.build-query-v2.sql --json`,
+    const out = execFileSync(
+      "npx",
+      ["wrangler", "d1", "execute", DB_NAME, "--local", `--config=${WRANGLER_CONFIG}`, "--file=.build-query-v2.sql", "--json"],
       { cwd: schemaDir, stdio: "pipe" },
     ).toString();
     if (existsSync(queryFile)) unlinkSync(queryFile);
@@ -578,7 +580,7 @@ if (!isIncremental) {
   const dropFile = join(schemaDir, ".build-drop-v2.sql");
   writeFileSync(dropFile, schemaDrop, "utf-8");
   try {
-    execSync(`npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-drop-v2.sql`, {
+    execFileSync("npx", ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, "--file=.build-drop-v2.sql"], {
       cwd: schemaDir,
       stdio: "pipe",
     });
@@ -593,13 +595,13 @@ if (!isIncremental) {
   // Remote D1 benötigt nach DROP etwas Zeit, um den Durable Object zurückzusetzen
   if (isRemote) {
     console.log("  ⏳ Warte 10s auf D1 DO-Reset...");
-    execSync("sleep 10");
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10_000);
   }
 
   const schemaOutFile = join(schemaDir, ".build-schema-v2.sql");
   writeFileSync(schemaOutFile, schemaSql, "utf-8");
   try {
-    execSync(`npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-schema-v2.sql`, {
+    execFileSync("npx", ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, "--file=.build-schema-v2.sql"], {
       cwd: schemaDir,
       stdio: "pipe",
     });
@@ -667,7 +669,8 @@ if (!isIncremental) {
           writeFileSync(gemeindenFile, batch.join("\n"), "utf-8");
           try {
             execWithRetry(
-              `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-gemeinden-v2.sql`,
+              "npx",
+              ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, "--file=.build-gemeinden-v2.sql"],
               { cwd: schemaDir, stdio: "pipe" },
             );
             process.stdout.write("✅\n");
@@ -712,8 +715,9 @@ if (isIncremental) {
     const migrateFile = join(schemaDir, ".build-migrate-v2.sql");
     writeFileSync(migrateFile, migrateSQL, "utf-8");
     try {
-      execSync(
-        `npx wrangler d1 execute ${DB_NAME} --local --config=${WRANGLER_CONFIG} --file=.build-migrate-v2.sql`,
+      execFileSync(
+        "npx",
+        ["wrangler", "d1", "execute", DB_NAME, "--local", `--config=${WRANGLER_CONFIG}`, "--file=.build-migrate-v2.sql"],
         { cwd: schemaDir, stdio: "pipe" },
       );
       console.log("  content_hash-Spalte angelegt ✅");
@@ -987,7 +991,8 @@ if (isIncremental) {
       writeFileSync(delFile, deleteStatements.map(stmtToInlineSql).join("\n"), "utf-8");
       try {
         execWithRetry(
-          `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-delete-v2.sql`,
+          "npx",
+          ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, "--file=.build-delete-v2.sql"],
           { cwd: schemaDir, stdio: "pipe" },
         );
         console.log("  DELETE ✅");
@@ -1019,7 +1024,8 @@ if (isIncremental) {
         writeFileSync(sqlFile, batch.map(stmtToInlineSql).join("\n"), "utf-8");
         try {
           execWithRetry(
-            `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-seed-v2.sql`,
+            "npx",
+            ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, "--file=.build-seed-v2.sql"],
             { cwd: schemaDir, stdio: "pipe" },
           );
           process.stdout.write("✅\n");
@@ -1051,7 +1057,8 @@ if (isIncremental) {
     writeFileSync(ftsFile, tailStatements.map(stmtToInlineSql).join("\n"), "utf-8");
     try {
       execWithRetry(
-        `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-fts-v2.sql`,
+        "npx",
+        ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, "--file=.build-fts-v2.sql"],
         { cwd: schemaDir, stdio: "pipe" },
       );
       process.stdout.write("✅\n");
@@ -1089,7 +1096,8 @@ if (isIncremental) {
       writeFileSync(sqlFile, batch.map(stmtToInlineSql).join("\n"), "utf-8");
       try {
         execWithRetry(
-          `npx wrangler d1 execute ${DB_NAME} ${mode} --config=${WRANGLER_CONFIG} --file=.build-seed-v2.sql`,
+          "npx",
+          ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, "--file=.build-seed-v2.sql"],
           { cwd: schemaDir, stdio: "pipe" },
         );
         process.stdout.write("✅\n");
