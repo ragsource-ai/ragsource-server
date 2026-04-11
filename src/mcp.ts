@@ -410,13 +410,22 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         const extensionsFilter = buildExtensionsFilter(effectiveExtensions);
 
         // Quellen abfragen — alle Felder, die das LLM braucht
+        // Wenn Extensions aktiv: additiv — Endpoint-Match ODER Extension-Match (OR-Verknüpfung).
+        // Ohne Extensions: nur Endpoint-Filter (AND-Verknüpfung wie bisher).
+        const hasExtensionsFilter = effectiveExtensions.length > 0;
+        const tenancyClause = hasExtensionsFilter
+          ? `(${endpointFilter.sql} OR ${extensionsFilter.sql})`
+          : endpointFilter.sql;
+        const tenancyParams = hasExtensionsFilter
+          ? [...endpointFilter.params, ...extensionsFilter.params]
+          : endpointFilter.params;
+
         const sql = `
           SELECT s.id, s.titel, s.ebene, s.rechtsrang, s.size_class, s.beschreibung,
                  EXISTS(SELECT 1 FROM source_tocs t WHERE t.source_id = s.id) AS toc_available
           FROM sources s
           WHERE ${geoFilter.sql}
-            AND ${endpointFilter.sql}
-            AND ${extensionsFilter.sql}
+            AND ${tenancyClause}
           ORDER BY s.ebene, s.titel
         `;
 
@@ -431,7 +440,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         };
         const result = await db
           .prepare(sql)
-          .bind(...geoFilter.params, ...endpointFilter.params, ...extensionsFilter.params)
+          .bind(...geoFilter.params, ...tenancyParams)
           .all<CatalogRow>();
 
         const publicSources = result.results ?? [];
@@ -887,6 +896,15 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         }
 
         // FTS5-Suche auf Paragraphen-Ebene mit Geo- und Projekt-Filter auf sources
+        // Wenn Extensions aktiv: additiv — Endpoint-Match ODER Extension-Match (OR-Verknüpfung).
+        const hasExtensionsFilter = effectiveExtensions.length > 0;
+        const tenancyClause = hasExtensionsFilter
+          ? `(${endpointFilter.sql} OR ${extensionsFilter.sql})`
+          : endpointFilter.sql;
+        const tenancyParams = hasExtensionsFilter
+          ? [...endpointFilter.params, ...extensionsFilter.params]
+          : endpointFilter.params;
+
         const sql = `
           SELECT
             ss.section_ref, ss.heading, ss.body,
@@ -897,8 +915,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           JOIN sources s ON ss.source_id = s.id
           WHERE sections_fts MATCH ?
             AND ${geoFilter.sql}
-            AND ${endpointFilter.sql}
-            AND ${extensionsFilter.sql}
+            AND ${tenancyClause}
           ORDER BY rank
           LIMIT 20
         `;
@@ -908,7 +925,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
 
         const result = await db
           .prepare(sql)
-          .bind(ftsQuery, ...geoFilter.params, ...endpointFilter.params, ...extensionsFilter.params)
+          .bind(ftsQuery, ...geoFilter.params, ...tenancyParams)
           .all<FtsRow>();
 
         const publicHits = (result.results ?? []).map(toHit);
