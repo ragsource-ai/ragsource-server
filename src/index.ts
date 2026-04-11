@@ -119,7 +119,6 @@ export default {
               status: 401,
               headers: {
                 "Content-Type": "application/json",
-                "WWW-Authenticate": 'Bearer realm="ragsource-gp1"',
                 "Access-Control-Allow-Origin": "*",
               },
             },
