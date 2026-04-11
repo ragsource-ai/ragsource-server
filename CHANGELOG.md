@@ -5,6 +5,22 @@ Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [2.6.1] — 2026-04-11
+
+### Geändert
+- **`execSync` → `execFileSync`**: Alle wrangler-CLI-Aufrufe in `build-db-v2.ts` verwenden jetzt Array-Argumente statt Template-String-Interpolation (Shell-Injection-Härtung).
+- **`sleep 10` → `Atomics.wait()`**: Plattformunabhängige Pause nach D1-DROP statt externem Shell-Befehl.
+- **`D1_DB_ID` aus Env-Variable**: `CLOUDFLARE_D1_DB_ID` (Fallback: bisheriger Wert aus `wrangler.jsonc`), um die ID aus dem Quellcode zu entfernen.
+- **`SafeSqlStr` Branded Type**: `SqlFragment.sql` ist jetzt ein opaker Typ — TypeScript erzwingt, dass nur explizit markierte Strings ins SQL-Gerüst fließen, niemals Benutzereingaben.
+- **`maxLength(100)` auf `geo`-Parameter**: Zod-Validierung in `RAGSource_catalog` und `RAGSource_query`.
+- **Token-Schätzung**: `length / 4` → `length / 3.5` (genauer für deutschen Text mit Umlauten/Komposita).
+- **Abhängigkeiten**: `hono` → `4.12.12`, `@hono/node-server` → `1.19.13` via `overrides` (schließt 6 moderate Dependabot-CVEs).
+
+### Behoben
+- Fehler-Logs in `fetchD1Batch` loggten bei HTTP-Fehlern die gesamte API-Antwort; jetzt nur noch `data.errors`.
+
+---
+
 ## [2.6.0] — 2026-04-09
 
 ### Hinzugefügt
