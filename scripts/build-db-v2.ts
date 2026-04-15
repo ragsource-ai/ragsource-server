@@ -446,13 +446,13 @@ function parseDocument(content: string): ParsedDocument {
     const headingMatch = currentHeadingLine.match(SECTION_HEADING_MATCH_RE);
     if (headingMatch) {
       // Strukturiertes Heading: §, Art., Kapitel, Anhang, plain-numerisch
-      sectionRef = headingMatch[2].trim();
+      sectionRef = headingMatch[2].trim().replace(/\u00A0/g, " ");
       headingText = (headingMatch[3] || "").trim();
     } else {
       // Generisches Heading (z.B. "### Vorwort", "### A. Einkommensteuergesetz")
       const m = currentHeadingLine.match(/^###\s+(.+?)(?:\s+[-—–]\s+(.*?))?$/);
       if (!m) return;
-      sectionRef = m[1].trim();
+      sectionRef = m[1].trim().replace(/\u00A0/g, " ");
       headingText = (m[2] || "").trim();
     }
 

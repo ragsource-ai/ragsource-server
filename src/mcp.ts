@@ -1095,16 +1095,18 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
 /**
  * Normalisiert eine Paragraphen-Referenz für den Abgleich.
  * Stellt sicher, dass nach § / Art. / Artikel / EG ein Leerzeichen steht.
+ * Ersetzt zunächst non-breaking spaces (U+00A0) durch reguläre Spaces.
  * Beispiel: "§2" → "§ 2", "Art.6" → "Art. 6"
  */
 function normalizeSectionRef(ref: string): string {
   return ref
     .trim()
-    .replace(/§\s*(\d)/g, "§ $1")
-    .replace(/Art\.\s*(\d)/g, "Art. $1")
-    .replace(/Artikel\s+(\d)/g, "Artikel $1")
-    .replace(/Erwägungsgrund\s+(\d)/g, "Erwägungsgrund $1")
-    .replace(/EG\s+(\d)/g, "EG $1");
+    .replace(/\u00A0/g, " ")
+    .replace(/§\s*(\d+)/g, "§ $1")
+    .replace(/Art\.\s*(\d+)/g, "Art. $1")
+    .replace(/Artikel\s+(\d+)/g, "Artikel $1")
+    .replace(/Erwägungsgrund\s+(\d+)/g, "Erwägungsgrund $1")
+    .replace(/EG\s+(\d+)/g, "EG $1");
 }
 
 /**
