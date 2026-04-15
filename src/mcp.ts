@@ -243,6 +243,91 @@ function resolveMandatoryEndpoint(): string | undefined {
 // Geo-Hilfsfunktionen
 // -----------------------------------------------------------------------
 
+/** ARS-Tabelle der 16 Bundesländer (2-stellig) */
+const BUNDESLAND_ARS: Record<string, string> = {
+  "01": "Schleswig-Holstein",
+  "02": "Hamburg",
+  "03": "Niedersachsen",
+  "04": "Bremen",
+  "05": "Nordrhein-Westfalen",
+  "06": "Hessen",
+  "07": "Rheinland-Pfalz",
+  "08": "Baden-Württemberg",
+  "09": "Bayern",
+  "10": "Saarland",
+  "11": "Berlin",
+  "12": "Brandenburg",
+  "13": "Mecklenburg-Vorpommern",
+  "14": "Sachsen",
+  "15": "Sachsen-Anhalt",
+  "16": "Thüringen",
+};
+
+/** Nur EU + Bund (alle ARS-Spalten IS NULL) */
+const GEO_BUND_ONLY: SqlFragment = {
+  sql: s("s.land_ars IS NULL AND s.kreis_ars IS NULL AND s.verband_ars IS NULL AND s.gemeinde_ars IS NULL"),
+  params: [],
+};
+
+/** Geo-Anweisungstext für Fehlermeldungen (a + b) */
+function buildGeoAnweisungen(): string {
+  const bundeslandListe = Object.entries(BUNDESLAND_ARS)
+    .map(([ars, name]) => `    ${ars} → ${name}`)
+    .join("\n");
+  return (
+    `Bitte das Tool mit dem passenden geo-Parameter erneut aufrufen:\n` +
+    `• Nur EU- und Bundesrecht:  geo = "00"\n` +
+    `• Gesamter Katalog (selten): geo = "full"\n` +
+    `• Landesrecht: geo = 2-stelliger ARS des Bundeslandes:\n${bundeslandListe}\n` +
+    `• Kommunale Fragen: geo = ARS der Gemeinde (12-stellig), des Gemeindeverbands (9) oder des Landkreises (5)\n\n` +
+    `Hinweis an den Nutzer: Die Anfrage läuft beim nächsten Mal effizienter, wenn der MCP-Link ` +
+    `über die in der System Message verlinkte Projektseite für den eigenen Geltungsbereich generiert wird — ` +
+    `dann wird geo automatisch übergeben.`
+  );
+}
+
+/**
+ * Fehlermeldung wenn kein geo-Parameter übergeben wurde.
+ */
+function buildNoGeoResponse(
+  systemMessage: string | null,
+): { content: Array<{ type: "text"; text: string }> } {
+  return {
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify({
+        ...(systemMessage && { system_message: systemMessage }),
+        error: "geo_missing",
+        hinweis:
+          `Dieser Aufruf enthält keinen geo-Parameter — das Tool benötigt immer eine Geo-Angabe.\n\n` +
+          buildGeoAnweisungen(),
+      }),
+    }],
+  };
+}
+
+/**
+ * Fehlermeldung wenn ein geo-Wert übergeben wurde, der nicht aufgelöst werden konnte.
+ */
+function buildGeoNotFoundResponse(
+  input: string,
+  systemMessage: string | null,
+): { content: Array<{ type: "text"; text: string }> } {
+  return {
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify({
+        ...(systemMessage && { system_message: systemMessage }),
+        error: "geo_not_found",
+        geo: { name: `"${input}" (nicht gefunden)`, level: "unbekannt" },
+        hinweis:
+          `Der geo-Wert "${input}" konnte nicht aufgelöst werden — diese ARS existiert nicht.\n\n` +
+          buildGeoAnweisungen(),
+      }),
+    }],
+  };
+}
+
 /**
  * Baut eine frühe MCP-Antwort für mehrdeutige Geo-Angaben.
  * Gibt eine Kandidatenliste + Support-Hinweis zurück, ohne Quellen zu liefern.
@@ -389,22 +474,43 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         // _currentGeo wird per fetch() pro Request gesetzt — robuster als sessionGeo-Closure,
         // die beim DO-Reuse stale sein kann.
         const effectiveGeo = geoInput ?? (this._currentGeo || null);
-        const geoResult = effectiveGeo ? await resolveGeo(effectiveGeo, db) : null;
 
-        // Mehrdeutiger Geo → früher Abbruch mit Kandidatenliste
-        if (geoResult && "ambiguous" in geoResult) {
-          return buildAmbiguousResponse(geoResult, systemMessage);
+        // Fall a: kein geo → früher Abbruch mit Anweisungen
+        if (!effectiveGeo) {
+          return buildNoGeoResponse(systemMessage);
         }
 
-        const geo = geoResult as ResolvedGeo | null;
-        // Geo wurde angegeben aber konnte nicht aufgelöst werden (kein Alias, kein Gemeindename)
-        const geoUnresolved = effectiveGeo !== null && geo === null;
-        // Fallback: nur EU + Bund (alle ARS-Spalten IS NULL) — kein Land bekannt, daher kein Land-Filter
-        const GEO_BUND_ONLY: SqlFragment = {
-          sql: s("s.land_ars IS NULL AND s.kreis_ars IS NULL AND s.verband_ars IS NULL AND s.gemeinde_ars IS NULL"),
-          params: [],
-        };
-        const geoFilter = geoUnresolved ? GEO_BUND_ONLY : buildGeoFilter(geo);
+        // Spezialwerte (kein DB-Lookup nötig)
+        // "00"   → explizit nur EU + Bund
+        // "full" → gesamter Katalog ohne Geo-Filter
+        let geoSpecialFilter: SqlFragment | null = null;
+        let geoSpecialInfo: { name: string; level: string } | null = null;
+        if (effectiveGeo === "00") {
+          geoSpecialFilter = GEO_BUND_ONLY;
+          geoSpecialInfo = { name: "EU & Bund", level: "bund" };
+        } else if (effectiveGeo.toLowerCase() === "full") {
+          geoSpecialFilter = { sql: s("1=1"), params: [] };
+          geoSpecialInfo = { name: "alle Ebenen", level: "alle" };
+        }
+
+        let geo: ResolvedGeo | null = null;
+        if (!geoSpecialFilter) {
+          const geoResult = await resolveGeo(effectiveGeo, db);
+
+          // Mehrdeutiger Geo → früher Abbruch mit Kandidatenliste
+          if (geoResult && "ambiguous" in geoResult) {
+            return buildAmbiguousResponse(geoResult, systemMessage);
+          }
+
+          geo = geoResult as ResolvedGeo | null;
+
+          // Fall b: ARS übergeben, aber nicht in der DB → früher Abbruch mit Anweisungen
+          if (geo === null) {
+            return buildGeoNotFoundResponse(effectiveGeo, systemMessage);
+          }
+        }
+
+        const geoFilter = geoSpecialFilter ?? buildGeoFilter(geo);
         const endpointFilter = buildEndpointFilter(resolveMandatoryEndpoint());
         const effectiveExtensions = extensionsInput?.length ? extensionsInput : this._currentExtensions;
         const extensionsFilter = buildExtensionsFilter(effectiveExtensions);
@@ -479,27 +585,22 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           s.beschreibung || null,
         ]);
 
-        const geoInfo = geo
-          ? {
-              name: geo.display.name,
-              level: geo.level,
-              ars: geo.gemeinde_ars ?? geo.verband_ars ?? geo.kreis_ars ?? geo.land_ars,
-            }
-          : geoUnresolved
-            ? { name: `"${effectiveGeo}" (nicht gefunden)`, level: "unbekannt" }
-            : { name: "alle Ebenen", level: "alle" };
+        const geoInfo = geoSpecialInfo ?? {
+          name: geo!.display.name,
+          level: geo!.level,
+          ars: geo!.gemeinde_ars ?? geo!.verband_ars ?? geo!.kreis_ars ?? geo!.land_ars,
+        };
 
-        // Nicht-konfiguriert-Fall:
-        // a) Geo nicht auflösbar (kein Alias, kein Gemeindename) → nur EU/Bund/Land angezeigt
-        // b) Gemeinde-Ebene aufgelöst, aber keine Gemeinde-Quellen vorhanden
+        // Nicht-konfiguriert-Fall (c):
+        // Gemeinde-Ebene aufgelöst, aber keine Gemeinde-Quellen vorhanden
         const notConfigured =
-          geoUnresolved ||
-          (geo?.level === "gemeinde" && !catalog.some((s) => s[2] === 5)); // rang 5 = Gemeinde
+          geo?.level === "gemeinde" && !catalog.some((s) => s[2] === 5); // rang 5 = Gemeinde
         const notConfiguredHinweis = notConfigured
           ? (notConfiguredMessage ??
-              `Hinweis an den Assistenten: Die Gemeinde "${effectiveGeo ?? geoInfo.name}" ist noch nicht als eigenständige Rechtsquelle hinterlegt. ` +
+              `Hinweis an den Assistenten: Die Gemeinde "${geo!.display.name}" ist noch nicht als eigenständige Rechtsquelle hinterlegt. ` +
               `Es werden nur übergeordnete Regelungen angezeigt (z.B. Landes-, Kreis- oder Verbandsrecht — bitte konkret aus dem Catalog benennen). ` +
-              `Weise den Nutzer darauf hin, dass gemeindespezifische Satzungen fehlen und die Gemeinde noch nicht aufgenommen wurde.`)
+              `Weise den Nutzer darauf hin, dass gemeindespezifische Satzungen noch nicht aufgenommen wurden, ` +
+              `und verweise ihn auf die in der System Message verlinkte Projektseite für eine vollständig konfigurierte Instanz.`)
           : undefined;
 
         return {
