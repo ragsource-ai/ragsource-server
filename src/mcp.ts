@@ -280,6 +280,9 @@ function buildGeoAnweisungen(): string {
     `• Gesamter Katalog (selten): geo = "full"\n` +
     `• Landesrecht: geo = 2-stelliger ARS des Bundeslandes:\n${bundeslandListe}\n` +
     `• Kommunale Fragen: geo = ARS der Gemeinde (12-stellig), des Gemeindeverbands (9) oder des Landkreises (5)\n\n` +
+    `Wenn aus dem Kontext eindeutig hervorgeht, welches Bundesland oder welche Gemeinde gemeint ist ` +
+    `(z.B. durch explizite Nennung im Gespräch), verwende den entsprechenden ARS-Code selbstständig. ` +
+    `Ist der Kontext unklar, frage per Multiple-Choice nach.\n\n` +
     `Hinweis an den Nutzer: Die Anfrage läuft beim nächsten Mal effizienter, wenn der MCP-Link ` +
     `über die in der System Message verlinkte Projektseite für den eigenen Geltungsbereich generiert wird — ` +
     `dann wird geo automatisch übergeben.`
