@@ -42530,6 +42530,16 @@
         "stadt konstanz"
       ],
       "locode": "KON"
+    },
+    {
+      "ars": "081185006001",
+      "name": "Schwieberdingen",
+      "verband_ars": "081185006",
+      "slug": "schwieberdingen",
+      "aliases": [
+        "schwieberdingen"
+      ],
+      "locode": "SWI"
     }
   ]
 }
