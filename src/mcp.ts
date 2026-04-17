@@ -119,19 +119,43 @@ function buildEndpointFilter(mandatory: string | undefined): SqlFragment {
  * wenn ein Filter aktiv ist.
  * Extension "universal" → immer sichtbar (wird automatisch hinzugefügt).
  * Leeres Array → kein Filter (alles durch).
- * Mehrere Werte → OR-verknüpft.
+ * Mehrere Werte → OR-verknüpft, AUSNAHME: "historisch" ist AND-verknüpft.
+ * Beispiel: ["Baurecht","historisch"] → hat Baurecht UND hat historisch.
  */
 function buildExtensionsFilter(userFilters: string[]): SqlFragment {
   if (userFilters.length === 0) {
     return { sql: s("1=1"), params: [] };
   }
-  const effectiveFilters = [...new Set([...userFilters, "universal"])];
-  const ph = effectiveFilters.map(() => "?").join(", ");
+
+  const hasHistorisch = userFilters.includes("historisch");
+  const contentFilters = userFilters.filter((f) => f !== "historisch");
+
+  if (hasHistorisch && contentFilters.length === 0) {
+    // Nur "historisch" → alle Dokumente mit historisch-Tag
+    return {
+      sql: s(`EXISTS (SELECT 1 FROM source_extensions sx WHERE sx.source_id = s.id AND sx.extension = ?)`),
+      params: ["historisch"],
+    };
+  }
+
+  const effectiveContent = [...new Set([...contentFilters, "universal"])];
+  const ph = effectiveContent.map(() => "?").join(", ");
+  const contentClause = s(`EXISTS (SELECT 1 FROM source_extensions sx WHERE sx.source_id = s.id AND sx.extension IN (${ph}))`);
+
+  if (hasHistorisch) {
+    // Inhaltliche Extensions (OR) UND historisch (AND)
+    return {
+      sql: s(`(
+        EXISTS (SELECT 1 FROM source_extensions sx2 WHERE sx2.source_id = s.id AND sx2.extension = ?)
+        AND ${contentClause}
+      )`),
+      params: ["historisch", ...effectiveContent],
+    };
+  }
+
   return {
-    sql: s(`(
-      EXISTS (SELECT 1 FROM source_extensions sx WHERE sx.source_id = s.id AND sx.extension IN (${ph}))
-    )`),
-    params: effectiveFilters,
+    sql: s(`(${contentClause})`),
+    params: effectiveContent,
   };
 }
 
