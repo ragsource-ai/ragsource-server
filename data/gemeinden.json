@@ -42463,7 +42463,8 @@
       "aliases": [
         "bad-boll",
         "bad boll"
-      ]
+      ],
+      "locode": "BBO"
     },
     {
       "ars": "081175009002",
@@ -42472,7 +42473,8 @@
       "slug": "aichelberg",
       "aliases": [
         "aichelberg"
-      ]
+      ],
+      "locode": "ABG"
     },
     {
       "ars": "081175009017",
@@ -42482,7 +42484,8 @@
       "aliases": [
         "duernau",
         "dürnau"
-      ]
+      ],
+      "locode": "DNA"
     },
     {
       "ars": "081175009023",
@@ -42491,7 +42494,8 @@
       "slug": "gammelshausen",
       "aliases": [
         "gammelshausen"
-      ]
+      ],
+      "locode": "GLS"
     },
     {
       "ars": "081175009029",
@@ -42500,7 +42504,8 @@
       "slug": "hattenhofen",
       "aliases": [
         "hattenhofen"
-      ]
+      ],
+      "locode": "HNO"
     },
     {
       "ars": "081175009060",
@@ -42512,7 +42517,8 @@
         "zell ua",
         "zell u.a.",
         "zell unter aichelberg"
-      ]
+      ],
+      "locode": "ZAG"
     },
     {
       "ars": "083355004043",
@@ -42522,7 +42528,8 @@
       "aliases": [
         "konstanz",
         "stadt konstanz"
-      ]
+      ],
+      "locode": "KON"
     }
   ]
 }
