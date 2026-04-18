@@ -211,7 +211,7 @@ const STOP_WORDS = new Set([
 /** FTS5-Query bereinigen: Stoppwörter entfernen, Wörter mit OR verknüpfen */
 function buildFtsQuery(input: string): string | null {
   const cleaned = input
-    .replace(/[^\w\sÄäÖöÜüß-]/g, " ")
+    .replace(/[^\w\sÄäÖöÜüß]/g, " ")   // Bindestrich entfernen — FTS5 interpretiert ihn als NOT-Operator
     .replace(/\s+/g, " ")
     .trim();
 
