@@ -1,11 +1,12 @@
 /**
  * RAGSource MCP v2 — Agentic RAG
  *
- * Vier Tools für hierarchische Rechtsquellensuche:
- *   RAGSource_catalog → Verzeichnis aller verfügbaren Quellen für eine Gemeinde
- *   RAGSource_toc     → Inhaltsverzeichnis(se) einer oder mehrerer Quellen
- *   RAGSource_get     → Originalwortlaut spezifischer Paragraphen
- *   RAGSource_query   → FTS5-Volltextsuche (Convenience-Wrapper / Fallback)
+ * Fünf Tools für hierarchische Rechtsquellensuche + strukturierte DB-Abfragen:
+ *   RAGSource_catalog  → Verzeichnis aller verfügbaren Quellen für eine Gemeinde
+ *   RAGSource_toc      → Inhaltsverzeichnis(se) einer oder mehrerer Quellen
+ *   RAGSource_get      → Originalwortlaut spezifischer Paragraphen
+ *   RAGSource_query    → FTS5-Volltextsuche (Convenience-Wrapper / Fallback)
+ *   RAGSource_db_query → Strukturierte Abfragen gegen tabellarische Datenbestände (optional, wenn DB_STRUCTURED gebunden)
  */
 
 import { McpAgent } from "agents/mcp";
@@ -179,8 +180,12 @@ const EBENE_ORDER: Record<string, number> = {
   "tarifrecht": 7,
 };
 
-function sortByEbene<T extends Pick<Source, "ebene" | "titel">>(sources: T[]): T[] {
+function sortByEbene<T extends Pick<Source, "ebene" | "titel" | "typ">>(sources: T[]): T[] {
   return [...sources].sort((a, b) => {
+    // Skills immer zuerst (vor allen Rechtsquellen)
+    const aIsSkill = a.typ === "skill" ? 0 : 1;
+    const bIsSkill = b.typ === "skill" ? 0 : 1;
+    if (aIsSkill !== bIsSkill) return aIsSkill - bIsSkill;
     const orderA = EBENE_ORDER[a.ebene ?? ""] ?? 99;
     const orderB = EBENE_ORDER[b.ebene ?? ""] ?? 99;
     if (orderA !== orderB) return orderA - orderB;
@@ -231,6 +236,9 @@ const INSTRUCTIONS_DEFAULT =
   "RAGSource_query als Alternative wenn: (a) Catalog liefert keine passende Quelle, " +
   "(b) Thema unklar und Quersuche über viele Quellen sinnvoll. " +
   "Nicht verwenden, wenn Quelle bereits aus Catalog bekannt — dann toc+get bevorzugen.\n" +
+  "\n" +
+  "Skills (typ: skill): Im Catalog-Response als eigener 'skills'-Block vor den Rechtsquellen gelistet. " +
+  "Skills laden und deren Anweisungen für Tool-Nutzung, Entscheidungsbäume und domänenspezifische Workflows befolgen.\n" +
   "\n" +
   "Normenhierarchie: Höherrangiges Recht bricht niederrangiges (z.B. Bundesgesetz > Landesgesetz). " +
   "Bei Konflikten: höherrangige Norm zitieren, Widerspruch benennen.";
@@ -449,8 +457,11 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     this.server.tool(
       "RAGSource_catalog",
       "SCHRITT 1 — Pflichtaufruf zu Beginn jeder Anfrage. " +
-      "Liefert alle verfügbaren Rechtsquellen für eine Gemeinde/Region (EU- bis Ortsrecht). " +
-      "Kompaktformat: 'schema' definiert die Felder, 'sources' ist ein Array von Arrays. " +
+      "Liefert alle verfügbaren Rechtsquellen für eine Gemeinde/Region (EU- bis Ortsrecht) " +
+      "sowie domänenspezifische Skills (Handlungsanleitungen für das LLM). " +
+      "Kompaktformat: 'schema' definiert die Felder. " +
+      "'skills' (optional) enthält Skills (typ: skill) — diese zuerst laden und befolgen. " +
+      "'sources' enthält die Rechtsquellen. " +
       "Feld 'size' (S/M/L) steuert den Folgeschritt: " +
       "S → RAGSource_get direkt; M/L → RAGSource_toc, dann gezielte §§ per RAGSource_get. " +
       "Gibt optional 'system_message' zurück — dieses immer zuerst ausgeben.",
@@ -554,7 +565,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           : endpointFilter.params;
 
         const sql = `
-          SELECT s.id, s.titel, s.ebene, s.rechtsrang, s.size_class, s.beschreibung,
+          SELECT s.id, s.titel, s.typ, s.ebene, s.rechtsrang, s.size_class, s.beschreibung,
                  EXISTS(SELECT 1 FROM source_tocs t WHERE t.source_id = s.id) AS toc_available
           FROM sources s
           WHERE ${geoFilter.sql}
@@ -565,6 +576,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         type CatalogRow = {
           id: string;
           titel: string;
+          typ: string | null;
           ebene: string | null;
           rechtsrang: number | null;
           size_class: string;
@@ -583,7 +595,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         let allSources = [...publicSources];
         if (this.env.DB_GP1) {
           const gp1Sql = `
-            SELECT s.id, s.titel, s.ebene, s.rechtsrang, s.size_class, s.beschreibung,
+            SELECT s.id, s.titel, s.typ, s.ebene, s.rechtsrang, s.size_class, s.beschreibung,
                    EXISTS(SELECT 1 FROM source_tocs t WHERE t.source_id = s.id) AS toc_available
             FROM sources s
             WHERE ${geoFilter.sql}
@@ -601,16 +613,20 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
 
         const sorted = sortByEbene(allSources);
 
-        // Catalog-Einträge als kompakte Arrays: [id, titel, rang, size, toc, hint]
+        // Skills und Rechtsquellen trennen
         const sizeMap: Record<string, string> = { small: "S", medium: "M", large: "L" };
-        const catalog: CatalogEntry[] = sorted.map((s) => [
+        const toEntry = (s: CatalogRow): CatalogEntry => [
           s.id,
           s.titel,
           s.rechtsrang,
           sizeMap[s.size_class] ?? "M",
           s.toc_available === 1,
           s.beschreibung || null,
-        ]);
+        ];
+        const skillEntries = sorted.filter((s) => s.typ === "skill");
+        const sourceEntries = sorted.filter((s) => s.typ !== "skill");
+        const skillCatalog: CatalogEntry[] = skillEntries.map(toEntry);
+        const sourceCatalog: CatalogEntry[] = sourceEntries.map(toEntry);
 
         const geoInfo = geoSpecialInfo ?? {
           name: geo!.display.name,
@@ -621,7 +637,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         // Nicht-konfiguriert-Fall (c):
         // Gemeinde-Ebene aufgelöst, aber keine Gemeinde-Quellen vorhanden
         const notConfigured =
-          geo?.level === "gemeinde" && !catalog.some((s) => s[2] === 5); // rang 5 = Gemeinde
+          geo?.level === "gemeinde" && !sourceCatalog.some((s) => s[2] === 5); // rang 5 = Gemeinde
         const notConfiguredHinweis = notConfigured
           ? (notConfiguredMessage ??
               `Hinweis an den Assistenten: Die Gemeinde "${geo!.display.name}" ist noch nicht als eigenständige Rechtsquelle hinterlegt. ` +
@@ -637,12 +653,13 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
               text: JSON.stringify({
                 ...(systemMessage && { system_message: systemMessage }),
                 geo: geoInfo,
-                total: catalog.length,
+                total: sorted.length,
                 ...(notConfigured && { not_configured: true, hinweis: notConfiguredHinweis }),
                 schema: ["id", "titel", "rang", "size", "toc", "hint"],
                 rang_legende: { 0: "EU", 1: "Bund", 2: "Land", 3: "Kreis", 4: "Verband", 5: "Gemeinde", 6: "Tarifrecht" },
                 size_legende: { S: "get direkt", M: "toc empfohlen", L: "toc erforderlich" },
-                sources: catalog,
+                ...(skillCatalog.length > 0 && { skills: skillCatalog }),
+                sources: sourceCatalog,
               }),
             },
           ],
@@ -1109,6 +1126,221 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         };
       },
     );
+
+    // ===================================================================
+    // Tool 5: RAGSource_db_query (nur wenn DB_STRUCTURED gebunden)
+    // ===================================================================
+    if (this.env.DB_STRUCTURED) {
+      const structDb = this.env.DB_STRUCTURED;
+      const currentEndpoint = ENDPOINT_BY_HOST[this._currentHost] ?? undefined;
+
+      // Datenbanken laden (Endpoint-Filter: NULL = universell, sonst nur passende)
+      type DbMetaRow = {
+        db: string;
+        beschreibung: string;
+        stand: string | null;
+        verbindlichkeit: string | null;
+        quelle_url_template: string | null;
+        lookup_keys: string;
+        columns: string;
+        endpoints: string | null;
+        tenant_note: string | null;
+      };
+      const allDbsResult = await structDb
+        .prepare("SELECT db, beschreibung, stand, verbindlichkeit, quelle_url_template, lookup_keys, columns, endpoints, tenant_note FROM rag_databases")
+        .all<DbMetaRow>();
+      const allDbs = allDbsResult.results ?? [];
+
+      // Für Description: nur DBs anzeigen, die für diesen Endpoint sichtbar sind
+      const visibleDbs = allDbs.filter((d) => {
+        if (!d.endpoints) return true; // universell
+        try {
+          const eps = JSON.parse(d.endpoints) as string[];
+          return !currentEndpoint || currentEndpoint === "all" || eps.includes(currentEndpoint);
+        } catch {
+          return true;
+        }
+      });
+
+      const dbsSection = visibleDbs.length > 0
+        ? visibleDbs.map((d) => {
+            let lookupKeysDisplay: string;
+            try {
+              const lk = JSON.parse(d.lookup_keys) as Record<string, string>;
+              lookupKeysDisplay = Object.entries(lk).map(([k, v]) => `${k} (${v})`).join(", ");
+            } catch {
+              lookupKeysDisplay = d.lookup_keys;
+            }
+            let colsDisplay: string;
+            try {
+              const cols = JSON.parse(d.columns) as Array<{ name: string; typ: string }>;
+              colsDisplay = cols.map((c) => `${c.name}:${c.typ}`).join(", ");
+            } catch {
+              colsDisplay = d.columns;
+            }
+            return (
+              `\n**${d.db}** — ${d.beschreibung}` +
+              `\nStand: ${d.stand ?? "unbekannt"} · Verbindlichkeit: ${d.verbindlichkeit ?? "unbekannt"}` +
+              (d.tenant_note ? `\nLizenz: ${d.tenant_note}` : "") +
+              `\nFilter-Spalten: ${lookupKeysDisplay}` +
+              `\nAlle Spalten: ${colsDisplay}`
+            );
+          }).join("\n")
+        : "\n(keine Datenbanken konfiguriert)";
+
+      const dbQueryDescription =
+        "Führt strukturierte Abfragen gegen tabellarische Datenbestände aus.\n" +
+        "Jede Datenbank hat eigene Filter-Spalten und Rückgabe-Spalten.\n\n" +
+        "Verfügbare Datenbanken:" + dbsSection + "\n\n" +
+        "Filter-Syntax (Suffix-Konvention):\n" +
+        "  { spalte: 'wert' }               exakt-match\n" +
+        "  { spalte_like: 'teil' }          LIKE '%teil%'\n" +
+        "  { spalte_gte: n, spalte_lte: n } Range\n" +
+        "  { spalte_in: ['a','b'] }         IN (OR auf Werten)\n" +
+        "  { spalte_isnull: true }          IS NULL\n" +
+        "  Mehrere Keys im filter:          AND-verknüpft\n" +
+        "  { any_of: [...] }                OR zwischen Objekten\n\n" +
+        "Ergebnis enthält: db, stand, verbindlichkeit, total, rows (+ ggf. quelle_url_template für Quellenlink).";
+
+      this.server.tool(
+        "RAGSource_db_query",
+        dbQueryDescription,
+        {
+          db: z.string().describe("Name der Datenbank, z.B. 'gefahrstoff', 'uebergabe_regeln'."),
+          filter: z
+            .record(z.union([z.string(), z.number(), z.boolean(), z.null(), z.array(z.union([z.string(), z.number()]))]))
+            .optional()
+            .describe(
+              "Filter-Objekt mit Suffix-Konvention. " +
+              "Spezialschlüssel 'any_of': Array von Filter-Objekten, OR-verknüpft. " +
+              "Beispiel: { un_nr: '1203' } oder { bezeichnung_like: 'benzin' }.",
+            ),
+          columns: z
+            .array(z.string())
+            .optional()
+            .describe("Welche Spalten zurückgegeben werden sollen. Default: alle Spalten der DB."),
+          limit: z
+            .number()
+            .int()
+            .min(1)
+            .max(50)
+            .optional()
+            .describe("Maximale Anzahl Zeilen. Default 5, max 50."),
+          order_by: z
+            .object({
+              column: z.string(),
+              direction: z.enum(["asc", "desc"]),
+            })
+            .optional()
+            .describe("Sortierung, z.B. { column: 'bezeichnung_de', direction: 'asc' }."),
+        },
+        { title: "RAGSource db_query", readOnlyHint: true, destructiveHint: false },
+        async ({ db: dbName, filter, columns: reqColumns, limit, order_by }) => {
+          // Endpoint-Zugriff prüfen
+          const dbMeta = allDbs.find((d) => d.db === dbName);
+          if (!dbMeta) {
+            return {
+              content: [{ type: "text" as const, text: JSON.stringify({ error: `Datenbank '${dbName}' nicht gefunden. Verfügbar: ${allDbs.map((d) => d.db).join(", ")}` }) }],
+              isError: true,
+            };
+          }
+          // Endpoint-Sichtbarkeitscheck
+          if (dbMeta.endpoints) {
+            try {
+              const eps = JSON.parse(dbMeta.endpoints) as string[];
+              if (currentEndpoint && currentEndpoint !== "all" && !eps.includes(currentEndpoint)) {
+                return {
+                  content: [{ type: "text" as const, text: JSON.stringify({ error: `Datenbank '${dbName}' ist für dieses Deployment nicht verfügbar.` }) }],
+                  isError: true,
+                };
+              }
+            } catch { /* JSON-Fehler → freigeben */ }
+          }
+
+          // Spalten-Whitelist aus Metadaten
+          let allColumns: Array<{ name: string; typ: string }>;
+          try {
+            allColumns = JSON.parse(dbMeta.columns) as Array<{ name: string; typ: string }>;
+          } catch {
+            return {
+              content: [{ type: "text" as const, text: JSON.stringify({ error: `Metadaten für '${dbName}' fehlerhaft (columns-JSON ungültig).` }) }],
+              isError: true,
+            };
+          }
+          const colNames = new Set(allColumns.map((c) => c.name));
+
+          // Ausgabe-Spalten validieren
+          const selectCols = reqColumns?.length
+            ? reqColumns.filter((c) => colNames.has(c))
+            : allColumns.map((c) => c.name);
+          if (selectCols.length === 0) {
+            return {
+              content: [{ type: "text" as const, text: JSON.stringify({ error: "Keine gültigen Spalten angefordert." }) }],
+              isError: true,
+            };
+          }
+
+          // Filter parsen
+          const filterResult = buildDbQueryFilter(filter ?? {}, colNames);
+          if ("error" in filterResult) {
+            return {
+              content: [{ type: "text" as const, text: JSON.stringify({ error: filterResult.error }) }],
+              isError: true,
+            };
+          }
+          const { sql: whereSql, params: whereParams } = filterResult;
+
+          // ORDER BY validieren
+          let orderSql = "";
+          if (order_by) {
+            if (!colNames.has(order_by.column)) {
+              return {
+                content: [{ type: "text" as const, text: JSON.stringify({ error: `Ungültige order_by-Spalte '${order_by.column}'.` }) }],
+                isError: true,
+              };
+            }
+            const dir = order_by.direction === "desc" ? "DESC" : "ASC";
+            orderSql = ` ORDER BY ${order_by.column} ${dir}`;
+          }
+
+          const effectiveLimit = Math.min(limit ?? 5, 50);
+          const colList = selectCols.join(", ");
+          const tableName = `db_${dbName}`;
+          const fullSql = `SELECT ${colList} FROM ${tableName}${whereSql ? ` WHERE ${whereSql}` : ""}${orderSql} LIMIT ${effectiveLimit + 1}`;
+
+          let rows: Record<string, unknown>[];
+          try {
+            const result = await structDb.prepare(fullSql).bind(...whereParams).all<Record<string, unknown>>();
+            rows = result.results ?? [];
+          } catch (e) {
+            return {
+              content: [{ type: "text" as const, text: JSON.stringify({ error: `Datenbankfehler: ${e instanceof Error ? e.message : String(e)}` }) }],
+              isError: true,
+            };
+          }
+
+          const truncated = rows.length > effectiveLimit;
+          if (truncated) rows = rows.slice(0, effectiveLimit);
+
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({
+                  db: dbName,
+                  stand: dbMeta.stand,
+                  verbindlichkeit: dbMeta.verbindlichkeit,
+                  ...(dbMeta.quelle_url_template && { quelle_url_template: dbMeta.quelle_url_template }),
+                  total: rows.length,
+                  ...(truncated && { hinweis: `Auf ${effectiveLimit} Zeilen begrenzt. Filter verfeinern für vollständige Ergebnisse.` }),
+                  rows,
+                }),
+              },
+            ],
+          };
+        },
+      );
+    }
   }
 }
 
@@ -1144,4 +1376,162 @@ function extractSectionRef(ref: string): string | null {
     /^(§\s*\d+[a-z]?|Art\.\s*\d+[a-z]?|Artikel\s+\d+[a-z]?|Erwägungsgrund\s+\d+|EG\s+\d+|Kapitel\s+\d+[a-z]?|Anhang\s+\d+[a-z]?)\b/i,
   );
   return m ? normalizeSectionRef(m[1]) : null;
+}
+
+// -----------------------------------------------------------------------
+// RAGSource_db_query Hilfsfunktionen
+// -----------------------------------------------------------------------
+
+type ScalarOrArray = string | number | boolean | null | (string | number)[];
+
+// Operator-Mapping: Suffix → SQL-Fragment-Funktion
+const DB_QUERY_SUFFIXES: Array<{ suffix: string; buildClause: (col: string, val: ScalarOrArray) => { clause: string; params: (string | number | null)[] } | { error: string } }> = [
+  {
+    suffix: "_like",
+    buildClause: (col, val) => {
+      if (typeof val !== "string" && typeof val !== "number") return { error: `'${col}_like' erwartet einen String-Wert.` };
+      return { clause: `${col} LIKE ?`, params: [`%${String(val)}%`] };
+    },
+  },
+  {
+    suffix: "_gte",
+    buildClause: (col, val) => {
+      if (typeof val !== "string" && typeof val !== "number") return { error: `'${col}_gte' erwartet einen Skalar-Wert.` };
+      return { clause: `${col} >= ?`, params: [val] };
+    },
+  },
+  {
+    suffix: "_lte",
+    buildClause: (col, val) => {
+      if (typeof val !== "string" && typeof val !== "number") return { error: `'${col}_lte' erwartet einen Skalar-Wert.` };
+      return { clause: `${col} <= ?`, params: [val] };
+    },
+  },
+  {
+    suffix: "_gt",
+    buildClause: (col, val) => {
+      if (typeof val !== "string" && typeof val !== "number") return { error: `'${col}_gt' erwartet einen Skalar-Wert.` };
+      return { clause: `${col} > ?`, params: [val] };
+    },
+  },
+  {
+    suffix: "_lt",
+    buildClause: (col, val) => {
+      if (typeof val !== "string" && typeof val !== "number") return { error: `'${col}_lt' erwartet einen Skalar-Wert.` };
+      return { clause: `${col} < ?`, params: [val] };
+    },
+  },
+  {
+    suffix: "_ne",
+    buildClause: (col, val) => {
+      if (typeof val !== "string" && typeof val !== "number" && val !== null) return { error: `'${col}_ne' erwartet einen Skalar-Wert.` };
+      if (val === null) return { clause: `${col} IS NOT NULL`, params: [] };
+      return { clause: `${col} != ?`, params: [val] };
+    },
+  },
+  {
+    suffix: "_in",
+    buildClause: (col, val) => {
+      if (!Array.isArray(val) || val.length === 0) return { error: `'${col}_in' erwartet ein nicht-leeres Array.` };
+      const ph = val.map(() => "?").join(", ");
+      return { clause: `${col} IN (${ph})`, params: val };
+    },
+  },
+  {
+    suffix: "_isnull",
+    buildClause: (col, val) => {
+      if (val !== true && val !== false) return { error: `'${col}_isnull' erwartet true oder false.` };
+      return { clause: val ? `${col} IS NULL` : `${col} IS NOT NULL`, params: [] };
+    },
+  },
+  {
+    suffix: "_notnull",
+    buildClause: (col, val) => {
+      if (val !== true && val !== false) return { error: `'${col}_notnull' erwartet true oder false.` };
+      return { clause: val ? `${col} IS NOT NULL` : `${col} IS NULL`, params: [] };
+    },
+  },
+];
+
+/**
+ * Parst ein Filter-Objekt (mit Suffix-Konvention) zu SQL WHERE-Fragment + Params.
+ * Spaltennamen werden gegen die Whitelist validiert — keine SQL-Injection möglich.
+ * `any_of`-Schlüssel erzeugt OR-Verknüpfung zwischen mehreren Filter-Objekten.
+ */
+function buildDbQueryFilter(
+  filter: Record<string, ScalarOrArray>,
+  colNames: Set<string>,
+): { sql: string; params: (string | number | null)[]; error?: never } | { sql?: never; params?: never; error: string } {
+  const andClauses: string[] = [];
+  const allParams: (string | number | null)[] = [];
+
+  // any_of: Array von Filter-Objekten, OR-verknüpft
+  if ("any_of" in filter) {
+    const anyOf = filter["any_of"];
+    if (!Array.isArray(anyOf)) return { error: "'any_of' muss ein Array von Filter-Objekten sein." };
+    const orClauses: string[] = [];
+    for (const subFilter of anyOf) {
+      if (typeof subFilter !== "object" || subFilter === null || Array.isArray(subFilter)) {
+        return { error: "'any_of'-Einträge müssen Objekte sein." };
+      }
+      const sub = buildDbQueryFilter(subFilter as Record<string, ScalarOrArray>, colNames);
+      if ("error" in sub) return sub;
+      if (sub.sql) {
+        orClauses.push(`(${sub.sql})`);
+        allParams.push(...sub.params);
+      }
+    }
+    if (orClauses.length > 0) {
+      andClauses.push(`(${orClauses.join(" OR ")})`);
+    }
+    // Rest des Filters (ohne any_of) weiterverarbeiten
+    const { any_of: _removed, ...rest } = filter;
+    if (Object.keys(rest).length > 0) {
+      const restResult = buildDbQueryFilter(rest, colNames);
+      if ("error" in restResult) return restResult;
+      if (restResult.sql) {
+        andClauses.push(restResult.sql);
+        allParams.push(...restResult.params);
+      }
+    }
+    return { sql: andClauses.join(" AND "), params: allParams };
+  }
+
+  for (const [key, val] of Object.entries(filter)) {
+    // Suffix ermitteln
+    let column = key;
+    let clauseResult: { clause: string; params: (string | number | null)[] } | { error: string } | null = null;
+
+    for (const { suffix, buildClause } of DB_QUERY_SUFFIXES) {
+      if (key.endsWith(suffix)) {
+        column = key.slice(0, -suffix.length);
+        clauseResult = buildClause(column, val);
+        break;
+      }
+    }
+
+    // Spaltennamen gegen Whitelist prüfen
+    if (!colNames.has(column)) {
+      return { error: `Unbekannte Spalte '${column}'. Gültige Spalten: ${[...colNames].join(", ")}.` };
+    }
+
+    if (clauseResult === null) {
+      // Kein Suffix → exakt-Match
+      if (val === null) {
+        andClauses.push(`${column} IS NULL`);
+      } else if (typeof val === "string" || typeof val === "number") {
+        andClauses.push(`${column} = ?`);
+        allParams.push(val);
+      } else {
+        return { error: `Ungültiger Wert für Spalte '${column}'. Exakt-Match erwartet Skalar oder null.` };
+      }
+    } else if ("error" in clauseResult) {
+      return { error: clauseResult.error };
+    } else {
+      andClauses.push(clauseResult.clause);
+      allParams.push(...clauseResult.params);
+    }
+  }
+
+  return { sql: andClauses.join(" AND "), params: allParams };
 }

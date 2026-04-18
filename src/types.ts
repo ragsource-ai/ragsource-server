@@ -12,6 +12,8 @@ export interface Env {
   DB: D1Database;
   /** Zweite D1-Datenbank für GP1-Deployments (private Inhalte). Nur gebunden wenn ENDPOINT_GP1=true. */
   DB_GP1?: D1Database;
+  /** Strukturierte Datenbanken (Gefahrstoffe, Personal etc.) — optional, aktiviert RAGSource_db_query. */
+  DB_STRUCTURED?: D1Database;
   MCP_OBJECT: DurableObjectNamespace;
   CONFIG: KVNamespace;
   RATE_LIMITER: RateLimiter;
