@@ -910,16 +910,16 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
                 }
               }
 
-              // 3. Fallback: INSTR-Suche (z.B. "2.1" findet "2.1 Sachlicher Anwendungsbereich")
-              //    INSTR statt LIKE: semantisch identisch (Substring-Check), aber ohne den
-              //    rekursiven Pattern-Matching-Algorithmus von LIKE → kein D1-Komplexitätslimit
-              //    bei langen Unicode-Strings (Umlaute, §, –).
+              // 3. Fallback: Prefix-Match (z.B. "2.1" findet "2.1 Sachlicher Anwendungsbereich")
+              //    INSTR statt LIKE: kein D1-Komplexitätslimit bei langen Unicode-Strings.
+              //    Wortgrenze: Match muss an Position 1 beginnen, danach Leerzeichen oder Stringende
+              //    → "§ 94" trifft nicht "§ 940" (Bug-Fix).
               if (!row) {
                 row = await activeDb
                   .prepare(
-                    "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? AND INSTR(section_ref, ?) > 0 LIMIT 1",
+                    "SELECT section_ref, heading, body FROM source_sections WHERE source_id = ? AND INSTR(section_ref, ?) = 1 AND (LENGTH(section_ref) = LENGTH(?) OR SUBSTR(section_ref, LENGTH(?) + 1, 1) = ' ') LIMIT 1",
                   )
-                  .bind(req.source, normalized)
+                  .bind(req.source, normalized, normalized, normalized)
                   .first<{ section_ref: string; heading: string | null; body: string }>();
               }
 
