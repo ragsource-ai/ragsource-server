@@ -57,9 +57,7 @@ function stmtToInlineSql(stmt: SqlStmt): string {
 // Konfiguration
 // -----------------------------------------------------------------------
 
-const DB_NAME = "ragsource-db-v2";
 const SCHEMA_FILE = "schema.sql";
-const WRANGLER_CONFIG = "wrangler.jsonc";
 const BATCH_SIZE = 80; // Statements pro Batch
 
 // D1 REST API (für --remote, ersetzt wrangler-CLI-Spawn pro Batch)
@@ -103,13 +101,33 @@ if (contentRoots.length === 0) {
   contentRoots.push(join(import.meta.dirname!, "..", "test-articles"));
 }
 
+const DB_NAME: string =
+  args.find((a) => a.startsWith("--db-name="))?.split("=")[1] ?? "ragsource-db-v2";
+
+const persistTo: string | undefined =
+  args.find((a) => a.startsWith("--persist-to="))?.split("=")[1];
+
+const wranglerEnv: string | undefined =
+  args.find((a) => a.startsWith("--env="))?.split("=")[1];
+
+// Optionaler absoluter Pfad zu einer anderen wrangler.jsonc (für standalone-Projekte).
+// Wenn nicht gesetzt: relative "wrangler.jsonc" im schemaDir (ragsource-server/).
+const wranglerConfigOverride: string | undefined =
+  args.find((a) => a.startsWith("--wrangler-config="))?.split("=").slice(1).join("=");
+
+// Wird in alle wrangler d1 execute-Aufrufe gesplittet.
+const persistArgs: string[] = persistTo ? [`--persist-to=${persistTo}`] : [];
+const envArgs: string[] = wranglerEnv ? [`--env=${wranglerEnv}`] : [];
+
 console.log(`📂 Content-Roots: ${contentRoots.join(", ")}`);
 console.log(`💾 Modus: ${mode}${isIncremental ? " (inkrementell)" : ""}`);
-console.log(`🗄️  Datenbank: ${DB_NAME}`);
+console.log(`🗄️  Datenbank: ${DB_NAME}${persistTo ? ` (persist-to: ${persistTo})` : ""}`);
 if (skipGemeinden) console.log(`⏭️  --skip-gemeinden: Gemeinden-Tabelle wird nicht angefasst.`);
 
 // Basisverzeichnis (ragsource-server/) — wird in schema-, seed- und execute-Schritten gebraucht
 const schemaDir = join(import.meta.dirname!, "..");
+// Wrangler-Config: Standard ist ragsource-server/wrangler.jsonc; --wrangler-config= überschreibt.
+const WRANGLER_CONFIG = wranglerConfigOverride ?? "wrangler.jsonc";
 
 // -----------------------------------------------------------------------
 // Hilfsfunktionen
@@ -349,7 +367,7 @@ function queryD1Local(sql: string): Record<string, unknown>[] {
   try {
     const out = execFileSync(
       "npx",
-      ["wrangler", "d1", "execute", DB_NAME, "--local", `--config=${WRANGLER_CONFIG}`, "--file=.build-query-v2.sql", "--json"],
+      ["wrangler", "d1", "execute", DB_NAME, "--local", `--config=${WRANGLER_CONFIG}`, ...envArgs, "--file=.build-query-v2.sql", "--json", ...persistArgs],
       { cwd: schemaDir, stdio: "pipe" },
     ).toString();
     if (existsSync(queryFile)) unlinkSync(queryFile);
@@ -580,7 +598,7 @@ if (!isIncremental) {
   const dropFile = join(schemaDir, ".build-drop-v2.sql");
   writeFileSync(dropFile, schemaDrop, "utf-8");
   try {
-    execFileSync("npx", ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, "--file=.build-drop-v2.sql"], {
+    execFileSync("npx", ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, ...envArgs, "--file=.build-drop-v2.sql", ...persistArgs], {
       cwd: schemaDir,
       stdio: "pipe",
     });
@@ -601,7 +619,7 @@ if (!isIncremental) {
   const schemaOutFile = join(schemaDir, ".build-schema-v2.sql");
   writeFileSync(schemaOutFile, schemaSql, "utf-8");
   try {
-    execFileSync("npx", ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, "--file=.build-schema-v2.sql"], {
+    execFileSync("npx", ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, ...envArgs, "--file=.build-schema-v2.sql", ...persistArgs], {
       cwd: schemaDir,
       stdio: "pipe",
     });
@@ -670,7 +688,7 @@ if (!isIncremental) {
           try {
             execWithRetry(
               "npx",
-              ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, "--file=.build-gemeinden-v2.sql"],
+              ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, ...envArgs, "--file=.build-gemeinden-v2.sql", ...persistArgs],
               { cwd: schemaDir, stdio: "pipe" },
             );
             process.stdout.write("✅\n");
@@ -717,7 +735,7 @@ if (isIncremental) {
     try {
       execFileSync(
         "npx",
-        ["wrangler", "d1", "execute", DB_NAME, "--local", `--config=${WRANGLER_CONFIG}`, "--file=.build-migrate-v2.sql"],
+        ["wrangler", "d1", "execute", DB_NAME, "--local", `--config=${WRANGLER_CONFIG}`, ...envArgs, "--file=.build-migrate-v2.sql", ...persistArgs],
         { cwd: schemaDir, stdio: "pipe" },
       );
       console.log("  content_hash-Spalte angelegt ✅");
@@ -992,7 +1010,7 @@ if (isIncremental) {
       try {
         execWithRetry(
           "npx",
-          ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, "--file=.build-delete-v2.sql"],
+          ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, ...envArgs, "--file=.build-delete-v2.sql", ...persistArgs],
           { cwd: schemaDir, stdio: "pipe" },
         );
         console.log("  DELETE ✅");
@@ -1025,7 +1043,7 @@ if (isIncremental) {
         try {
           execWithRetry(
             "npx",
-            ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, "--file=.build-seed-v2.sql"],
+            ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, ...envArgs, "--file=.build-seed-v2.sql", ...persistArgs],
             { cwd: schemaDir, stdio: "pipe" },
           );
           process.stdout.write("✅\n");
@@ -1058,7 +1076,7 @@ if (isIncremental) {
     try {
       execWithRetry(
         "npx",
-        ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, "--file=.build-fts-v2.sql"],
+        ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, ...envArgs, "--file=.build-fts-v2.sql", ...persistArgs],
         { cwd: schemaDir, stdio: "pipe" },
       );
       process.stdout.write("✅\n");
@@ -1097,7 +1115,7 @@ if (isIncremental) {
       try {
         execWithRetry(
           "npx",
-          ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, "--file=.build-seed-v2.sql"],
+          ["wrangler", "d1", "execute", DB_NAME, mode, `--config=${WRANGLER_CONFIG}`, ...envArgs, "--file=.build-seed-v2.sql", ...persistArgs],
           { cwd: schemaDir, stdio: "pipe" },
         );
         process.stdout.write("✅\n");
