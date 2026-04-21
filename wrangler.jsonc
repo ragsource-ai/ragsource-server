@@ -217,6 +217,59 @@
     },
 
     // -----------------------------------------------------------------------
+    // local: Nur lokal auf dem PC, kein Cloudflare-Deployment.
+    // Start: wrangler dev --env local --local --persist-to ~/.ragsource-local
+    // DB befüllen: npx tsx scripts/build-db-v2.ts --local --persist-to ~/.ragsource-local
+    //              --content-root=~/Bibliothek/Feuerwehr/IdF/md
+    //              --content-root=~/Bibliothek/Feuerwehr/LFS_BW/md
+    // MCP-URL: http://localhost:8788/mcp
+    // Kein Auth, kein Endpoint-Filter (localhost → undefined → alles sichtbar)
+    // -----------------------------------------------------------------------
+    "local": {
+      "name": "ragsource-local",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "ragsource-local-db",
+          "database_id": "00000000-0000-0000-0000-000000000001"
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "class_name": "RAGSourceMCPv2",
+            "name": "MCP_OBJECT"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "new_sqlite_classes": ["RAGSourceMCPv2"],
+          "tag": "v1"
+        }
+      ],
+      "vars": {
+        "DISABLE_QUERY": "false"
+      },
+      "kv_namespaces": [
+        {
+          "binding": "CONFIG",
+          "id": "00000000000000000000000000000001"
+        }
+      ],
+      "unsafe": {
+        "bindings": [
+          {
+            "type": "ratelimit",
+            "name": "RATE_LIMITER",
+            "namespace_id": "1006",
+            "simple": { "limit": 10000, "period": 60 }
+          }
+        ]
+      }
+    },
+
+    // -----------------------------------------------------------------------
     // brandmeister GP1: DB_PUBLIC + DB_GP1, Bearer Token Auth.
     // Deploy: wrangler deploy --env brandmeister-gp1
     // URL:    mcp-gp1.brandmeister.ai (Custom Domain in CF-Dashboard setzen)

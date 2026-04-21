@@ -237,6 +237,10 @@ const INSTRUCTIONS_DEFAULT =
   "(b) Thema unklar und Quersuche über viele Quellen sinnvoll. " +
   "Nicht verwenden, wenn Quelle bereits aus Catalog bekannt — dann toc+get bevorzugen.\n" +
   "\n" +
+  "Tools verfügbar machen: Falls Tools als 'deferred' gelistet sind, " +
+  "zuerst ToolSearch mit 'select:RAGSource_catalog,RAGSource_toc,RAGSource_get,RAGSource_query' aufrufen — " +
+  "dann erst RAGSource_catalog aufrufen.\n" +
+  "\n" +
   "Skills (typ: skill): Im Catalog-Response als eigener 'skills'-Block vor den Rechtsquellen gelistet. " +
   "Skills laden und deren Anweisungen für Tool-Nutzung, Entscheidungsbäume und domänenspezifische Workflows befolgen.\n" +
   "\n" +
@@ -444,7 +448,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // Instructions: KV-Eintrag hat Vorrang vor hardcoded INSTRUCTIONS_DEFAULT.
     // KV-Key: "instructions:{endpoint}" oder "instructions:default".
     const kvKey = endpoint ? `instructions:${endpoint}` : "instructions:default";
-    const instructions = (await this.env.CONFIG.get(kvKey)) ?? INSTRUCTIONS_DEFAULT;
+    const instructions = (await this.env.CONFIG?.get(kvKey)) ?? INSTRUCTIONS_DEFAULT;
 
     this.server = new McpServer(
       { name: "RAGSource", version: "2.0.0" },
@@ -484,10 +488,6 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             "Leer = alle Quellen des Endpoints. " +
             "Beispiele: 'Feuerwehr', 'Arbeitsrecht', 'Wahlrecht', 'Datenschutz'.",
           ),
-        projekt: z
-          .string()
-          .optional()
-          .describe("Legacy-Parameter — wird ignoriert, Endpoint wird automatisch erkannt."),
       },
       { title: "RAGSource catalog", readOnlyHint: true, destructiveHint: false },
       async ({ geo: geoInput, extensions: extensionsInput }) => {
@@ -500,10 +500,10 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         const smKey = currentEndpoint ? `system_message:${currentEndpoint}` : null;
         const ncKey = currentEndpoint ? `not_configured_message:${currentEndpoint}` : null;
         const [smEndpoint, smGlobal, ncEndpoint, ncGlobal] = await Promise.all([
-          smKey ? this.env.CONFIG.get(smKey) : Promise.resolve(null),
-          this.env.CONFIG.get("system_message"),
-          ncKey ? this.env.CONFIG.get(ncKey) : Promise.resolve(null),
-          this.env.CONFIG.get("not_configured_message"),
+          smKey ? this.env.CONFIG?.get(smKey) ?? null : Promise.resolve(null),
+          this.env.CONFIG?.get("system_message") ?? null,
+          ncKey ? this.env.CONFIG?.get(ncKey) ?? null : Promise.resolve(null),
+          this.env.CONFIG?.get("not_configured_message") ?? null,
         ]);
         const systemMessage = smEndpoint ?? smGlobal;
         const notConfiguredMessage = ncEndpoint ?? ncGlobal;
@@ -590,20 +590,24 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
 
         const publicSources = result.results ?? [];
 
-        // Dual-DB: GP1-Quellen transparent hinzufügen (kein Endpoint-/Extensions-Filter nötig —
-        // alle GP1-Inhalte sind per Definition für dieses Deployment sichtbar).
+        // Dual-DB: GP1-Quellen transparent hinzufügen.
+        // Extensions-Filter anwenden falls aktiv — GP1-Inhalte folgen demselben
+        // Filter wie die Hauptquellen (kein Endpoint-Filter nötig, da alle GP1-
+        // Inhalte per Definition für dieses Deployment sichtbar sind).
         let allSources = [...publicSources];
         if (this.env.DB_GP1) {
+          const gp1Filter = hasExtensionsFilter ? extensionsFilter : null;
           const gp1Sql = `
             SELECT s.id, s.titel, s.typ, s.ebene, s.rechtsrang, s.size_class, s.beschreibung,
                    EXISTS(SELECT 1 FROM source_tocs t WHERE t.source_id = s.id) AS toc_available
             FROM sources s
             WHERE ${geoFilter.sql}
+              ${gp1Filter ? `AND ${gp1Filter.sql}` : ""}
             ORDER BY s.ebene, s.titel
           `;
           const gp1Result = await this.env.DB_GP1
             .prepare(gp1Sql)
-            .bind(...geoFilter.params)
+            .bind(...geoFilter.params, ...(gp1Filter?.params ?? []))
             .all<CatalogRow>();
           const existingIds = new Set(publicSources.map((s) => s.id));
           for (const s of gp1Result.results ?? []) {
@@ -694,13 +698,6 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             "TOC-Ebene für mehrteilige Werke, z.B. 'buch-2' für BGB Buch 2. " +
             "Ohne Angabe: 'gesamt'.",
           ),
-        geo: z
-          .string()
-          .optional()
-          .describe(
-            "Geo-Kontext (ARS-Code oder Klarname) — wird akzeptiert, beeinflusst die Abfrage aber nicht. " +
-            "Source-IDs sind bereits durch RAGSource_catalog geo-gefiltert.",
-          ),
       },
       { title: "RAGSource toc", readOnlyHint: true, destructiveHint: false },
       async ({ sources: sourceIds, level }) => {
@@ -758,7 +755,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
               toc: null,
             };
           }
-          const toc = tocMap.get(id) ?? null;
+          const toc = (tocMap.get(id) ?? null)?.replace(/\*\*/g, "") ?? null;
           const sections = sectionsMap.get(id);
           return {
             source_id: source.id,
@@ -813,13 +810,6 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           .describe(
             "Liste von Quellen mit optionalen Paragraphen-Referenzen. " +
             "Max. 8 Quellen, max. 25 §§ je Quelle, max. 50 §§ gesamt pro Aufruf.",
-          ),
-        geo: z
-          .string()
-          .optional()
-          .describe(
-            "Geo-Kontext (ARS-Code oder Klarname) — wird akzeptiert, beeinflusst die Abfrage aber nicht. " +
-            "Source-IDs sind bereits durch RAGSource_catalog geo-gefiltert.",
           ),
       },
       { title: "RAGSource get", readOnlyHint: true, destructiveHint: false },
@@ -1075,9 +1065,10 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
 
         const publicHits = (result.results ?? []).map(toHit);
 
-        // Dual-DB: GP1 FTS — nur Geo-Filter (kein Endpoint-/Extensions-Filter nötig)
+        // Dual-DB: GP1 FTS — Geo-Filter + Extensions-Filter falls aktiv
         let allHits = publicHits;
         if (this.env.DB_GP1) {
+          const gp1Filter = hasExtensionsFilter ? extensionsFilter : null;
           const gp1Sql = `
             SELECT ss.section_ref, ss.heading, ss.body,
                    s.id AS source_id, s.titel, s.ebene, s.size_class,
@@ -1087,10 +1078,11 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             JOIN sources s ON ss.source_id = s.id
             WHERE sections_fts MATCH ?
               AND ${geoFilter.sql}
+              ${gp1Filter ? `AND ${gp1Filter.sql}` : ""}
             ORDER BY rank
             LIMIT 20
           `;
-          const gp1Result = await this.env.DB_GP1.prepare(gp1Sql).bind(ftsQuery, ...geoFilter.params).all<FtsRow>();
+          const gp1Result = await this.env.DB_GP1.prepare(gp1Sql).bind(ftsQuery, ...geoFilter.params, ...(gp1Filter?.params ?? [])).all<FtsRow>();
           const gp1Hits = (gp1Result.results ?? []).map(toHit);
           const seen = new Set(publicHits.map((h) => `${h.source_id}::${h.section_ref}`));
           const newHits = gp1Hits.filter((h) => !seen.has(`${h.source_id}::${h.section_ref}`));
@@ -1373,7 +1365,7 @@ function normalizeSectionRef(ref: string): string {
  */
 function extractSectionRef(ref: string): string | null {
   const m = ref.match(
-    /^(§\s*\d+[a-z]?|Art\.\s*\d+[a-z]?|Artikel\s+\d+[a-z]?|Erwägungsgrund\s+\d+|EG\s+\d+|Kapitel\s+\d+[a-z]?|Anhang\s+\d+[a-z]?)\b/i,
+    /^(§\s*\d+[a-z]?|Art\.\s*\d+[a-z]?|Artikel\s+\d+[a-z]?|Erwägungsgrund\s+\d+|EG\s+\d+|Kapitel\s+\d+[a-z]?|Anhang\s+\d+[a-z]?|\d+(?:\.\d+)*[a-z]?)\b/i,
   );
   return m ? normalizeSectionRef(m[1]) : null;
 }

@@ -215,9 +215,16 @@ INSERT OR REPLACE INTO geo_aliases (alias, typ, ars) VALUES
   ('081175009060', 'gemeinde', '081175009060'),
   -- Landkreis Konstanz
   ('08335', 'landkreis', '08335'),
-  ('konstanz', 'landkreis', '08335'),
   ('landkreis konstanz', 'landkreis', '08335'),
   ('lkr konstanz', 'landkreis', '08335'),
-  -- Stadt Konstanz (Stadtkreis = Gemeinde-Ebene)
+  -- Stadt Konstanz (Stadtkreis = Gemeinde-Ebene; "konstanz" → immer die Stadt)
   ('083355004043', 'gemeinde', '083355004043'),
-  ('stadt konstanz', 'gemeinde', '083355004043');
+  ('konstanz', 'gemeinde', '083355004043'),
+  ('stadt konstanz', 'gemeinde', '083355004043'),
+  -- Stadt Göppingen ("göppingen" → immer die Stadt; Landkreis über "lkr göppingen")
+  ('081175005026', 'gemeinde', '081175005026'),
+  ('göppingen', 'gemeinde', '081175005026'),
+  ('goeppingen', 'gemeinde', '081175005026'),
+  ('goppingen', 'gemeinde', '081175005026'),
+  ('stadt göppingen', 'gemeinde', '081175005026'),
+  ('stadt goeppingen', 'gemeinde', '081175005026');

@@ -50,10 +50,10 @@ export async function resolveGeo(
     return resolveArsUpward(trimmed, db);
   }
 
-  // Nicht-numerisch → Alias-Lookup (ohne typ-Filter)
+  // Nicht-numerisch → Alias-Lookup; Gemeinde wird bei Typ-Konflikt bevorzugt
   const lower = trimmed.toLowerCase();
   const exact = await db
-    .prepare("SELECT ars FROM geo_aliases WHERE alias = ?")
+    .prepare("SELECT ars FROM geo_aliases WHERE alias = ? ORDER BY CASE typ WHEN 'gemeinde' THEN 0 WHEN 'verband' THEN 1 WHEN 'landkreis' THEN 2 ELSE 3 END LIMIT 1")
     .bind(lower)
     .first<{ ars: string }>();
 
@@ -65,7 +65,7 @@ export async function resolveGeo(
   const normalized = normalizeString(lower);
   if (normalized !== lower) {
     const norm = await db
-      .prepare("SELECT ars FROM geo_aliases WHERE alias = ?")
+      .prepare("SELECT ars FROM geo_aliases WHERE alias = ? ORDER BY CASE typ WHEN 'gemeinde' THEN 0 WHEN 'verband' THEN 1 WHEN 'landkreis' THEN 2 ELSE 3 END LIMIT 1")
       .bind(normalized)
       .first<{ ars: string }>();
     if (norm) {
