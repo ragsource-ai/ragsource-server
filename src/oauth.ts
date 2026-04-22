@@ -4,8 +4,8 @@
  * Implementiert den Authorization Code Flow mit PKCE (RFC 7636),
  * Dynamic Client Registration (RFC 7591) und Server Metadata (RFC 8414).
  *
- * Aktiviert sich nur wenn GP1_TOKEN gesetzt ist.
- * "Passwort" = der GP1_TOKEN-Wert. User gibt ihn auf der /authorize-Seite ein.
+ * Aktiviert sich nur wenn ACCESS_TOKEN gesetzt ist.
+ * "Passwort" = der ACCESS_TOKEN-Wert. User gibt ihn auf der /authorize-Seite ein.
  * Ausgestellte Access Tokens werden in KV gespeichert (TTL 1 Jahr).
  *
  * KV-Keys (CONFIG-Namespace):
@@ -182,7 +182,7 @@ export async function handleAuthorize(request: Request, env: Env): Promise<Respo
     const password = form.get("password") as string;
 
     // Zugangscode prüfen
-    if (!env.GP1_TOKEN || password !== env.GP1_TOKEN) {
+    if (!env.ACCESS_TOKEN || password !== env.ACCESS_TOKEN) {
       // Zurück zum Formular mit Fehler
       const params = new URLSearchParams({
         client_id: clientId,
@@ -288,7 +288,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
 // -----------------------------------------------------------------------
 // Token validieren (in index.ts verwendet)
-// Akzeptiert: statischen GP1_TOKEN ODER KV-gespeicherten OAuth-Token
+// Akzeptiert: statischen ACCESS_TOKEN ODER KV-gespeicherten OAuth-Token
 // -----------------------------------------------------------------------
 
 export async function validateBearer(authHeader: string, env: Env): Promise<boolean> {
@@ -296,7 +296,7 @@ export async function validateBearer(authHeader: string, env: Env): Promise<bool
   const token = authHeader.slice(7);
 
   // Statischer Token (Fallback / direkte API-Nutzung)
-  if (token === env.GP1_TOKEN) return true;
+  if (token === env.ACCESS_TOKEN) return true;
 
   // OAuth-Token aus KV
   const val = await env.CONFIG.get(`oauth:token:${token}`);

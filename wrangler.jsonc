@@ -273,7 +273,7 @@
     // brandmeister GP1: DB_PUBLIC + DB_GP1, Bearer Token Auth.
     // Deploy: wrangler deploy --env brandmeister-gp1
     // URL:    mcp-gp1.brandmeister.ai (Custom Domain in CF-Dashboard setzen)
-    // Secret: wrangler secret put GP1_TOKEN --env brandmeister-gp1
+    // Secret: wrangler secret put ACCESS_TOKEN --env brandmeister-gp1
     // DB_GP1 anlegen: wrangler d1 create brandmeister-gp1 → ID eintragen
     // -----------------------------------------------------------------------
     "brandmeister-gp1": {

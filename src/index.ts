@@ -72,7 +72,7 @@ function createApp() {
     return c.json({
       status: "ok",
       version: "2.0.0",
-      deployment: c.env.GP1_TOKEN ? "gp1" : "public",
+      deployment: c.env.ACCESS_TOKEN ? "gp1" : "public",
       mcp_tools: ["RAGSource_catalog", "RAGSource_toc", "RAGSource_get", "RAGSource_query"],
       db: {
         sources: sourceCount,
@@ -130,9 +130,9 @@ export default {
     const path = url.pathname;
 
     // ----------------------------------------------------------------
-    // OAuth-Endpunkte (nur aktiv wenn GP1_TOKEN gesetzt)
+    // OAuth-Endpunkte (nur aktiv wenn ACCESS_TOKEN gesetzt)
     // ----------------------------------------------------------------
-    if (env.GP1_TOKEN) {
+    if (env.ACCESS_TOKEN) {
       if (path === "/.well-known/oauth-protected-resource") {
         return handleProtectedResourceMetadata(request);
       }
@@ -159,7 +159,7 @@ export default {
       if (request.method === "OPTIONS") return corsPreflightResponse();
 
       // Auth Guard — statischer Token ODER KV-gespeicherter OAuth-Token
-      if (env.GP1_TOKEN) {
+      if (env.ACCESS_TOKEN) {
         const auth = request.headers.get("Authorization") ?? "";
         const ok = await validateBearer(auth, env);
         if (!ok) {

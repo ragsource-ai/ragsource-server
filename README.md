@@ -34,7 +34,7 @@ LLM (Claude Web / Desktop)
     └── MCP-Protokoll → POST /mcp
                              │
                     Cloudflare Worker (index.ts)
-                    ├── OAuth-Endpunkte (bei GP1_TOKEN gesetzt)
+                    ├── OAuth-Endpunkte (bei ACCESS_TOKEN gesetzt)
                     ├── Auth Guard (Bearer / OAuth-Token)
                     ├── Rate Limiter (60 req/min pro IP)
                     └── McpAgent Durable Object (mcp.ts)
@@ -51,7 +51,7 @@ Drei Konfigurationsschalter unterscheiden alle Deployments — kein Code-Fork:
 |---|---|---|
 | Endpoint-Filter | `ENDPOINT_BY_HOST` in `mcp.ts` (Host → Endpoint-Slug) | Welche Quellen aus der Haupt-DB sichtbar sind |
 | GP1-Datenbank | `DB_GP1`-Binding in `wrangler.jsonc` | Transparente Dual-DB: GP1-Inhalte werden ohne Markierung gemergt |
-| GP1-Auth | `GP1_TOKEN` Wrangler-Secret | Aktiviert OAuth 2.0 Authorization Server + Auth Guard |
+| GP1-Auth | `ACCESS_TOKEN` Wrangler-Secret | Aktiviert OAuth 2.0 Authorization Server + Auth Guard |
 
 ---
 
@@ -133,7 +133,7 @@ const ENDPOINT_BY_HOST: Record<string, string> = {
 
 ## OAuth 2.0 (GP1-Deployments)
 
-Aktiviert sich automatisch wenn `GP1_TOKEN` als Wrangler Secret gesetzt ist. Implementiert in `src/oauth.ts`.
+Aktiviert sich automatisch wenn `ACCESS_TOKEN` als Wrangler Secret gesetzt ist. Implementiert in `src/oauth.ts`.
 
 ### Endpunkte
 
@@ -142,7 +142,7 @@ Aktiviert sich automatisch wenn `GP1_TOKEN` als Wrangler Secret gesetzt ist. Imp
 | `GET /.well-known/oauth-protected-resource` | RFC 9728 | Resource Metadata — Claude Web Discovery |
 | `GET /.well-known/oauth-authorization-server` | RFC 8414 | Auth Server Metadata |
 | `POST /oauth/register` | RFC 7591 | Dynamic Client Registration |
-| `GET /oauth/authorize` | RFC 6749 | Login-Formular (Passwort = GP1_TOKEN) |
+| `GET /oauth/authorize` | RFC 6749 | Login-Formular (Passwort = ACCESS_TOKEN) |
 | `POST /oauth/authorize` | RFC 6749 | Token prüfen, Auth-Code ausstellen |
 | `POST /oauth/token` | RFC 6749 | Auth-Code + PKCE → Access Token |
 
@@ -150,14 +150,14 @@ Aktiviert sich automatisch wenn `GP1_TOKEN` als Wrangler Secret gesetzt ist. Imp
 
 1. Claude Web entdeckt `/.well-known/oauth-protected-resource` via `WWW-Authenticate`-Header (401)
 2. Registriert sich dynamisch via `/oauth/register`
-3. Öffnet `/oauth/authorize` → Nutzer gibt GP1_TOKEN ein
+3. Öffnet `/oauth/authorize` → Nutzer gibt ACCESS_TOKEN ein
 4. Worker stellt OAuth Access Token aus (TTL 1 Jahr, gespeichert in KV)
 5. Claude Web verwendet OAuth-Token als Bearer für alle MCP-Requests
 
 ### Auth Guard
 
 Akzeptiert zwei Token-Arten:
-- **Statischer GP1_TOKEN** — für Claude Desktop, API-Direktzugriff
+- **Statischer ACCESS_TOKEN** — für Claude Desktop, API-Direktzugriff
 - **KV-gespeicherter OAuth-Token** — für Claude Web
 
 KV-Keys (CONFIG-Namespace): `oauth:client:{id}`, `oauth:code:{code}` (TTL 600s), `oauth:token:{token}` (TTL 1 Jahr).
@@ -165,7 +165,7 @@ KV-Keys (CONFIG-Namespace): `oauth:client:{id}`, `oauth:code:{code}` (TTL 600s),
 ### Token rotieren
 
 ```bash
-wrangler secret put GP1_TOKEN --env brandmeister-gp1
+wrangler secret put ACCESS_TOKEN --env brandmeister-gp1
 wrangler deploy --env brandmeister-gp1
 ```
 
@@ -299,7 +299,7 @@ wrangler deploy --env mein-deployment
 ### 5. GP1-Auth aktivieren (optional)
 
 ```bash
-wrangler secret put GP1_TOKEN --env mein-deployment
+wrangler secret put ACCESS_TOKEN --env mein-deployment
 wrangler deploy --env mein-deployment
 ```
 
@@ -368,7 +368,7 @@ https://mcp.amtsschimmel.ai/mcp
 ```
 https://mcp-gp1.brandmeister.ai/mcp
 ```
-→ Claude Web startet automatisch den OAuth-Flow. Zugangscode = GP1_TOKEN-Wert.
+→ Claude Web startet automatisch den OAuth-Flow. Zugangscode = ACCESS_TOKEN-Wert.
 
 ### Claude Desktop / Claude Code
 
@@ -381,7 +381,7 @@ https://mcp-gp1.brandmeister.ai/mcp
     "brandmeister-gp1": {
       "url": "https://mcp-gp1.brandmeister.ai/mcp",
       "headers": {
-        "Authorization": "Bearer <GP1_TOKEN>"
+        "Authorization": "Bearer <ACCESS_TOKEN>"
       }
     }
   }

@@ -20,7 +20,7 @@ export interface Env {
   /** Wenn "true": RAGSource_query wird nicht registriert (Compliance-Modus) */
   DISABLE_QUERY?: string;
   /** Bearer Token für GP1-Auth. Gesetzt → Auth Guard aktiv. Als Wrangler Secret hinterlegen. */
-  GP1_TOKEN?: string;
+  ACCESS_TOKEN?: string;
 }
 
 // -----------------------------------------------------------------------
