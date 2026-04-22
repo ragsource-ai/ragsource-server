@@ -61,8 +61,8 @@ const SCHEMA_FILE = "schema.sql";
 const BATCH_SIZE = 80; // Statements pro Batch
 
 // D1 REST API (für --remote, ersetzt wrangler-CLI-Spawn pro Batch)
-// ID aus Umgebungsvariable; Fallback ist der Wert aus wrangler.jsonc (nur für lokale Ausführung).
-const D1_DB_ID = process.env.CLOUDFLARE_D1_DB_ID ?? "55d4deda-60c5-4b70-a6d1-2b76f43e5715";
+// Kein Fallback — verhindert versehentliche Prod-Schreibzugriffe bei fehlendem Env-Var.
+const D1_DB_ID = process.env.CLOUDFLARE_D1_DB_ID ?? "";
 const CF_API_BASE = "https://api.cloudflare.com/client/v4";
 const API_CONCURRENCY = 5; // max. parallele D1-API-Anfragen
 
@@ -142,9 +142,10 @@ function estimateTokens(text: string): number {
 
 /** Führt einen Befehl aus, mit bis zu `retries` Versuchen bei Fehler. */
 function execWithRetry(file: string, args: string[], opts: Parameters<typeof execFileSync>[2], retries = 3): void {
+  const optsWithTimeout = { timeout: 30_000, ...opts };
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      execFileSync(file, args, opts);
+      execFileSync(file, args, optsWithTimeout);
       return;
     } catch (e) {
       if (attempt === retries) throw e;
@@ -172,9 +173,9 @@ const PARAM_SIZE_THRESHOLD = 50_000; // Zeichen — ab dieser Größe einzeln se
 async function fetchD1Batch(statements: SqlStmt[]): Promise<void> {
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
   const apiToken = process.env.CLOUDFLARE_API_TOKEN;
-  if (!accountId || !apiToken) {
+  if (!accountId || !apiToken || !D1_DB_ID) {
     throw new Error(
-      "Für --remote werden CLOUDFLARE_ACCOUNT_ID und CLOUDFLARE_API_TOKEN als Env-Variablen benötigt.",
+      "Für --remote werden CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN und CLOUDFLARE_D1_DB_ID als Env-Variablen benötigt.",
     );
   }
   const url = `${CF_API_BASE}/accounts/${accountId}/d1/database/${D1_DB_ID}/query`;
@@ -326,9 +327,9 @@ function computeHash(content: string): string {
 async function queryD1Remote(sql: string): Promise<Record<string, unknown>[]> {
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
   const apiToken = process.env.CLOUDFLARE_API_TOKEN;
-  if (!accountId || !apiToken) {
+  if (!accountId || !apiToken || !D1_DB_ID) {
     throw new Error(
-      "Für --remote werden CLOUDFLARE_ACCOUNT_ID und CLOUDFLARE_API_TOKEN als Env-Variablen benötigt.",
+      "Für --remote werden CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN und CLOUDFLARE_D1_DB_ID als Env-Variablen benötigt.",
     );
   }
   const url = `${CF_API_BASE}/accounts/${accountId}/d1/database/${D1_DB_ID}/query`;

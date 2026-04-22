@@ -2,6 +2,10 @@ node_modules/
 .wrangler/
 .build-seed.sql
 
+# Lokale Ausführung
+start-local.sh
+src/src
+
 # Windows-Artefakt
 nul
 

@@ -1292,11 +1292,11 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
               };
             }
             const dir = order_by.direction === "desc" ? "DESC" : "ASC";
-            orderSql = ` ORDER BY ${order_by.column} ${dir}`;
+            orderSql = ` ORDER BY \`${order_by.column}\` ${dir}`;
           }
 
           const effectiveLimit = Math.min(limit ?? 5, 50);
-          const colList = selectCols.join(", ");
+          const colList = selectCols.map((c) => `\`${c}\``).join(", ");
           const tableName = `db_${dbName}`;
           const fullSql = `SELECT ${colList} FROM ${tableName}${whereSql ? ` WHERE ${whereSql}` : ""}${orderSql} LIMIT ${effectiveLimit + 1}`;
 
