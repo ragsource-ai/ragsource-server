@@ -1,5 +1,11 @@
 # RAGSource Server v2
 
+[![Deploy](https://github.com/ragsource-ai/ragsource-server/actions/workflows/deploy.yml/badge.svg)](https://github.com/ragsource-ai/ragsource-server/actions/workflows/deploy.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare_Workers-F38020.svg?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
+[![MCP](https://img.shields.io/badge/MCP-Streamable_HTTP-8A2BE2.svg)](https://modelcontextprotocol.io/)
+
 Cloudflare Worker mit D1 (SQLite + FTS5), der Rechtswissen und vertrauliche Dokumente als Agentic-RAG-System über MCP (Model Context Protocol) bereitstellt.
 
 Eine Codebasis — beliebig viele isolierte Deployments, rein konfigurationsgetrieben.

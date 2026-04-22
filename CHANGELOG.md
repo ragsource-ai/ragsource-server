@@ -5,6 +5,35 @@ Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+---
+
+## [2.7.0] — 2026-04-22
+
+### Hinzugefügt
+- **wrangler:** `local`-Environment für Offline-Entwicklung ohne Cloudflare-Account
+- **build-db-v2:** `--wrangler-config=` Parameter für standalone Projekte (GP1, CT1)
+- **Badges** im README (Deploy-Status, License, TypeScript, Cloudflare Workers, MCP)
+- **CHANGELOG:** Keep-a-Changelog-Format mit Versions-Links
+
+### Geändert
+- **mcp:** Tool-Beschreibungen bereinigt — Legacy-Parameter `projekt` entfernt, `geo` aus `toc`/`get`-Schemas entfernt
+- **mcp:** `INSTRUCTIONS_DEFAULT` mit ToolSearch-Hint und Skills-Block erweitert
+- **geo:** Alias-Lookup bevorzugt jetzt Gemeinde vor Landkreis — `Konstanz`/`Göppingen` lösen auf die Stadt auf
+- **geo:** Aliases für Stadt Göppingen (`081175005026`) und Stadt Konstanz (`083355004043`)
+- **types:** `CONFIG` KV-Namespace als optional markiert (fehlt in `local`-Env)
+
+### Behoben
+- **security:** SQL-Spaltennamen in `RAGSource_db_query` mit Backticks quotiert (Injection-Härtung für `colList` und `ORDER BY`)
+- **ci:** `CLOUDFLARE_D1_DB_ID` in `rebuild-db.yml` ergänzt (fehlte nach Entfernung des Hardcode-Fallbacks)
+- **build-db-v2:** Kein stiller Hardcode-Fallback für D1-DB-ID mehr — Fehler bei `--remote` ohne Env-Var
+- **build-db-v2:** `execWithRetry` mit 30s Timeout gegen unbegrenztes Hängen
+- **get:** Paragraph-Prefix-Bug — `§ 94` traf `§ 940` über INSTR-Substring-Match
+- **fts:** Bindestrich aus FTS5-Query entfernt — verhinderte SQL-Parsing als NOT-Operator
+
+---
+
 ## [2.6.2] — 2026-04-11
 
 ### Hinzugefügt
@@ -165,6 +194,10 @@ Erster stabiler Release des Agentic RAG v2-Systems. Vollständige Neuentwicklung
 
 ---
 
+[Unreleased]: https://github.com/ragsource-ai/ragsource-server/compare/v2.7.0...HEAD
+[2.7.0]: https://github.com/ragsource-ai/ragsource-server/compare/v2.6.2...v2.7.0
+[2.6.2]: https://github.com/ragsource-ai/ragsource-server/compare/v2.6.1...v2.6.2
+[2.6.1]: https://github.com/ragsource-ai/ragsource-server/compare/v2.6.0...v2.6.1
 [2.6.0]: https://github.com/ragsource-ai/ragsource-server/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/ragsource-ai/ragsource-server/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/ragsource-ai/ragsource-server/compare/v2.3.0...v2.4.0
