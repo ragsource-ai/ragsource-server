@@ -11,6 +11,19 @@ Eine Codebasis — beliebig viele isolierte Deployments, rein konfigurationsgetr
 
 ---
 
+## Zwei Repos, ein System
+
+RAGSource trennt **Code** und **Inhalt** sauber in zwei öffentliche Repositories:
+
+| Repository | Inhalt |
+|---|---|
+| **ragsource-server** ← du bist hier | Worker-Code, Build-Pipeline, CI/CD, Datenbankschema |
+| [**ragsource-content**](https://github.com/ragsource-ai/ragsource-content) | Rechtstexte, Skills, Policies — öffentliche Wissensbasis (621+ Quellen) |
+
+Inhalt fließt über einen `repository_dispatch`-Trigger automatisch in die Datenbank: Push auf `ragsource-content` → DB-Rebuild → live in ~2 Minuten.
+
+---
+
 ## Referenzprojekte
 
 | Projekt | Beschreibung |
