@@ -68,6 +68,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_D1_DB_ID: "55d4deda-60c5-4b70-a6d1-2b76f43e5715"
 
       - name: DB vollstaendig neu bauen (manuell, ohne Gemeinden-Seed)
         if: ${{ inputs.full_rebuild == true }}
@@ -79,6 +80,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_D1_DB_ID: "55d4deda-60c5-4b70-a6d1-2b76f43e5715"
 
       - name: Gemeinden-Seed einspielen (optional, remote D1)
         if: ${{ inputs.include_gemeinden == true }}
