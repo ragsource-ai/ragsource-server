@@ -73,6 +73,10 @@ CREATE TABLE IF NOT EXISTS db_pubchem (
   niosh_rel_twa TEXT,
   niosh_rel_stel TEXT,
   osha_pel   TEXT,
+  flash_point TEXT,                  -- Flammpunkt, z.B. "-43 °C" oder "74 °C"
+  lel_pct    TEXT,                   -- Untere Explosionsgrenze, z.B. "1.1"
+  uel_pct    TEXT,                   -- Obere Explosionsgrenze, z.B. "7.6"
+  autoignition TEXT,                 -- Selbstentzündungstemperatur, z.B. "280 °C"
   stand      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pubchem_cas ON db_pubchem(cas);
@@ -109,6 +113,10 @@ CREATE TABLE IF NOT EXISTS db_gefahrstoff (
   pubchem_niosh_rel_twa TEXT,          -- NIOSH REL TWA
   pubchem_niosh_rel_stel TEXT,         -- NIOSH REL STEL
   pubchem_osha_pel TEXT,               -- OSHA PEL TWA
+  pubchem_flash_point TEXT,            -- Flammpunkt (z.B. "-43 °C")
+  pubchem_lel_pct TEXT,                -- Untere Explosionsgrenze in % (z.B. "1.1")
+  pubchem_uel_pct TEXT,                -- Obere Explosionsgrenze in % (z.B. "7.6")
+  pubchem_autoignition TEXT,           -- Selbstentzündungstemperatur (z.B. "280 °C")
   pubchem_stand TEXT,
 
   -- TRGS 900 (DE Luftgrenzwerte, § 5 UrhG amtliches Werk)
