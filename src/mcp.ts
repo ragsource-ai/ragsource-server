@@ -460,33 +460,26 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     this.server.tool(
       "RAGSource_catalog",
-      "SCHRITT 1 — Pflichtaufruf zu Beginn jeder Anfrage. " +
-      "Liefert alle verfügbaren Rechtsquellen für eine Gemeinde/Region (EU- bis Ortsrecht) " +
-      "sowie domänenspezifische Skills (Handlungsanleitungen für das LLM). " +
-      "Kompaktformat: 'schema' definiert die Felder. " +
-      "'skills' (optional) enthält Skills (typ: skill) — diese zuerst laden und befolgen. " +
-      "'sources' enthält die Rechtsquellen. " +
-      "Feld 'size' (S/M/L) steuert den Folgeschritt: " +
-      "S → RAGSource_get direkt; M/L → RAGSource_toc, dann gezielte §§ per RAGSource_get. " +
-      "Gibt optional 'system_message' zurück — dieses immer zuerst ausgeben.",
+      "STEP 1 — Required first call for every request. " +
+      "Returns available legal sources (EU to municipal level) and optional skills (LLM instructions). " +
+      "Skills (typ:skill): read and follow before proceeding. " +
+      "Routing by size: S → RAGSource_get directly; M/L → RAGSource_toc first, then RAGSource_get. " +
+      "system_message in response: prepend verbatim as italicized system notice to the user.",
       {
         geo: z
           .string()
           .max(100)
           .optional()
           .describe(
-            "ARS-Code (2/5/9/12 Stellen) oder Gemeindename. " +
-            "Bestimmt welche Rechtsebenen zurückgegeben werden (Nur-aufwärts-Prinzip). " +
-            "12-stellig=Gemeinde, 9-stellig=Verband, 5-stellig=Kreis, 2-stellig=Land. " +
-            "Beispiele: '081175009012' (Bad Boll), '08117' (LKR Göppingen), '08' (BW).",
+            "ARS code (2=state, 5=district, 9=association, 12=municipality) or place name. " +
+            "Examples: '08' (BW), '08117' (LKR Göppingen), '081175009012' (Bad Boll).",
           ),
         extensions: z
           .array(z.string())
           .optional()
           .describe(
-            "Optionale Extension-Filter (ODER-verknüpft) — schränkt den Katalog thematisch ein. " +
-            "Leer = alle Quellen des Endpoints. " +
-            "Beispiele: 'Feuerwehr', 'Arbeitsrecht', 'Wahlrecht', 'Datenschutz'.",
+            "Optional topic filters (OR-linked). Restricts catalog to matching sources. " +
+            "Examples: 'Feuerwehr', 'Arbeitsrecht', 'Datenschutz'. Empty = all sources.",
           ),
       },
       { title: "RAGSource catalog", readOnlyHint: true, destructiveHint: false },
@@ -676,27 +669,23 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     this.server.tool(
       "RAGSource_toc",
-      "SCHRITT 2 — Für 'medium'/'large'-Quellen aufrufen, bevor RAGSource_get verwendet wird. " +
-      "Liefert das Inhaltsverzeichnis mit allen §§/Artikeln und Kurztiteln, " +
-      "z.B. '§ 6 Aufgaben (Pflichtaufgaben, Mindeststärke)'. " +
-      "Bis zu 8 Quellen gleichzeitig (Batch). " +
-      "section_ref-Werte aus dem TOC exakt an RAGSource_get übergeben. " +
-      "Wenn keine TOC-Datei hinterlegt: small/medium-Quellen liefern alle §§ direkt im Feld 'sections' — RAGSource_get ist dann für diese Quellen nicht mehr nötig.",
+      "STEP 2 — Table of contents for medium/large sources. " +
+      "Returns all §§/articles with short titles, e.g. '§ 6 Aufgaben (Pflichtaufgaben, Mindeststärke)'. " +
+      "Batch: up to 8 sources per call. Pass sections values verbatim to RAGSource_get. " +
+      "Fallback: if no TOC file exists, small/medium sources return all §§ directly in 'sections' — skip RAGSource_get for those.",
       {
         sources: z
           .array(z.string())
           .min(1)
           .max(8)
           .describe(
-            "Liste von Source-IDs aus RAGSource_catalog, z.B. ['FwG_BW', 'BBO_Satzung_Feuerwehr']. " +
-            "Max. 8 pro Aufruf.",
+            "Source IDs from RAGSource_catalog, e.g. ['FwG_BW', 'BBO_Satzung_Feuerwehr']. Max. 8 per call.",
           ),
         level: z
           .string()
           .optional()
           .describe(
-            "TOC-Ebene für mehrteilige Werke, z.B. 'buch-2' für BGB Buch 2. " +
-            "Ohne Angabe: 'gesamt'.",
+            "TOC level for multi-part works, e.g. 'buch-2' for BGB Book 2. Default: 'gesamt'.",
           ),
       },
       { title: "RAGSource toc", readOnlyHint: true, destructiveHint: false },
@@ -783,33 +772,32 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     this.server.tool(
       "RAGSource_get",
-      "SCHRITT 3 — Lädt den Originalwortlaut von Paragraphen aus einer oder mehreren Rechtsquellen. " +
-      "section_ref exakt wie im TOC, z.B. '§ 2', 'Artikel 6', 'Prod. Nr. 41.40.08'. " +
-      "Max. 8 Quellen pro Aufruf; max. 25 §§ je Quelle; max. 50 §§ gesamt. " +
-      "small-Quellen: sections weglassen → liefert das komplette Dokument. " +
-      "Liefert 'quelle_url' für Markdown-Links in der Antwort.",
+      "STEP 3 — Loads original text of §§ from one or more legal sources. " +
+      "Use sections values exactly as returned by RAGSource_toc, e.g. '§ 2', 'Artikel 6'. " +
+      "Limits: 8 sources / 25 §§ per source / 50 §§ total. " +
+      "Small sources: omit sections to load the complete document. " +
+      "Response includes 'quelle_url' for source citations.",
       {
         sources: z
           .array(
             z.object({
               source: z
                 .string()
-                .describe("Source-ID aus RAGSource_catalog, z.B. 'FwG_BW'"),
+                .describe("Source ID from RAGSource_catalog, e.g. 'FwG_BW'"),
               sections: z
                 .array(z.string())
                 .max(25)
                 .optional()
                 .describe(
-                  "Paragraphen-Referenzen, z.B. ['§ 2', '§ 8', 'Artikel 24']. " +
-                  "Leer lassen für gesamtes Dokument (nur für small-Quellen empfohlen).",
+                  "Section references from RAGSource_toc, e.g. ['§ 2', '§ 8', 'Artikel 24']. " +
+                  "Omit to load the complete document (small sources only).",
                 ),
             }),
           )
           .min(1)
           .max(8)
           .describe(
-            "Liste von Quellen mit optionalen Paragraphen-Referenzen. " +
-            "Max. 8 Quellen, max. 25 §§ je Quelle, max. 50 §§ gesamt pro Aufruf.",
+            "Sources with optional section references. Max. 8 sources, 25 §§ per source, 50 §§ total.",
           ),
       },
       { title: "RAGSource get", readOnlyHint: true, destructiveHint: false },
@@ -966,34 +954,32 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     if (!this.env.DISABLE_QUERY) this.server.tool(
       "RAGSource_query",
-      "FALLBACK / QUERSUCHE — sinnvoll in zwei Situationen: " +
-      "(1) RAGSource_catalog liefert keine eindeutig passende Quelle; " +
-      "(2) Thema unklar oder Begriff soll quer über viele Quellen gleichzeitig gesucht werden " +
-      "(z.B. 'Welche Paragraphen in allen Quellen erwähnen Spielhallen?'). " +
-      "Nicht verwenden, wenn Quelle bereits aus dem Catalog bekannt — dann toc + get bevorzugen. " +
-      "FTS5-Volltextsuche über alle indizierten Paragraphen (max. 20 Treffer). " +
-      "Treffer enthalten source_id und section_ref für gezieltes Nachladen per RAGSource_get.",
+      "FALLBACK / CROSS-SEARCH — two use cases: " +
+      "(1) RAGSource_catalog returns no matching source; " +
+      "(2) topic unclear or cross-source search needed (e.g. 'Which §§ mention Spielhallen?'). " +
+      "Do not use if source is already known from catalog — prefer toc + get. " +
+      "Full-text search, max. 20 results with source_id and section references for RAGSource_get.",
       {
         query: z
           .string()
-          .describe("Suchanfrage in natürlicher Sprache"),
+          .describe("Search query in natural language"),
         geo: z
           .string()
           .max(100)
           .optional()
           .describe(
-            "Geo-Filter: ARS-Code (2/5/9/12 Stellen) oder Klarname. " +
-            "Beispiele: '08', '08117', '081175009012', 'Bad Boll'",
+            "Geo filter: ARS code (2/5/9/12 digits) or place name. " +
+            "Examples: '08', '08117', '081175009012', 'Bad Boll'",
           ),
         extensions: z
           .array(z.string())
           .optional()
-          .describe("Optionale Extension-Filter (ODER-verknüpft). Leer = alle Quellen des Endpoints."),
+          .describe("Optional topic filters (OR-linked). Empty = all sources."),
         hints: z
           .array(z.string())
           .optional()
           .describe(
-            "Optionale Zusatz-Suchbegriffe: Synonyme, Fachbegriffe, verwandte Begriffe",
+            "Additional search terms: synonyms, technical terms, related concepts",
           ),
       },
       { title: "RAGSource query", readOnlyHint: true, destructiveHint: false },
