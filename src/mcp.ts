@@ -228,26 +228,27 @@ function buildFtsQuery(input: string): string | null {
 // Vollständige Masterprompts → src/prompts/*.md (Claude.ai Projekt-System-Prompt)
 // -----------------------------------------------------------------------
 
-/** Generische Kurzbeschreibung — gilt für alle RAGSource-Projekte */
+/** Generic description — applies to all RAGSource deployments */
 const INSTRUCTIONS_DEFAULT =
   "RAGSource — Agentic RAG Framework.\n" +
   "\n" +
   "Workflow: RAGSource_catalog → RAGSource_toc (M/L) → RAGSource_get.\n" +
-  "RAGSource_query als Alternative wenn: (a) Catalog liefert keine passende Quelle, " +
-  "(b) Thema unklar und Quersuche über viele Quellen sinnvoll. " +
-  "Nicht verwenden, wenn Quelle bereits aus Catalog bekannt — dann toc+get bevorzugen.\n" +
+  "RAGSource_query as alternative when: (a) catalog returns no matching source, " +
+  "(b) topic unclear and cross-source search is useful. " +
+  "Do not use if source is already known from catalog — prefer toc+get.\n" +
   "\n" +
-  "Tools verfügbar machen: Falls Tools als 'deferred' gelistet sind, " +
-  "zuerst ToolSearch mit 'select:RAGSource_catalog,RAGSource_toc,RAGSource_get,RAGSource_query' aufrufen — " +
-  "dann erst RAGSource_catalog aufrufen.\n" +
+  "Deferred tools: if tools are listed as deferred, first call " +
+  "ToolSearch with 'select:RAGSource_catalog,RAGSource_toc,RAGSource_get,RAGSource_query' — " +
+  "then call RAGSource_catalog.\n" +
   "\n" +
-  "Skills (typ: skill): Im Catalog-Response als eigener 'skills'-Block vor den Rechtsquellen gelistet. " +
-  "Skills laden und deren Anweisungen für Tool-Nutzung, Entscheidungsbäume und domänenspezifische Workflows befolgen. " +
-  "Skills (Säule 2) und die darin referenzierten Primärquellen (Säule 1) funktionieren nur zusammen — " +
-  "alle in Skills genannten Quellen aus allen Säulen immer direkt laden.\n" +
+  "Skills (typ: skill): listed in catalog response before legal sources. " +
+  "Load all skills upfront and follow their instructions for tool use, decision trees, and domain workflows. " +
+  "Skills (tier 2) and the primary sources they reference (tier 1: laws, FwDVs, ordinances) only work together — " +
+  "always load all referenced sources from all tiers immediately. " +
+  "Load any additional sources mentioned in skills without waiting to be asked.\n" +
   "\n" +
-  "Normenhierarchie: Höherrangiges Recht bricht niederrangiges (z.B. Bundesgesetz > Landesgesetz). " +
-  "Bei Konflikten: höherrangige Norm zitieren, Widerspruch benennen.";
+  "Norm hierarchy: higher-ranking law supersedes lower-ranking (e.g. federal > state). " +
+  "On conflicts: cite the higher-ranking norm and name the conflict.";
 
 // -----------------------------------------------------------------------
 // Projekt-Erkennung via Host-Header
