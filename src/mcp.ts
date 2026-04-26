@@ -242,7 +242,9 @@ const INSTRUCTIONS_DEFAULT =
   "dann erst RAGSource_catalog aufrufen.\n" +
   "\n" +
   "Skills (typ: skill): Im Catalog-Response als eigener 'skills'-Block vor den Rechtsquellen gelistet. " +
-  "Skills laden und deren Anweisungen für Tool-Nutzung, Entscheidungsbäume und domänenspezifische Workflows befolgen.\n" +
+  "Skills laden und deren Anweisungen für Tool-Nutzung, Entscheidungsbäume und domänenspezifische Workflows befolgen. " +
+  "Skills (Säule 2) und die darin referenzierten Primärquellen (Säule 1) funktionieren nur zusammen — " +
+  "alle in Skills genannten Quellen aus allen Säulen immer direkt laden.\n" +
   "\n" +
   "Normenhierarchie: Höherrangiges Recht bricht niederrangiges (z.B. Bundesgesetz > Landesgesetz). " +
   "Bei Konflikten: höherrangige Norm zitieren, Widerspruch benennen.";
@@ -262,6 +264,7 @@ const ENDPOINT_BY_HOST: Record<string, string> = {
   "mcp.paragrafenreiter.ai": "all",
   "mcp.brandmeister.ai": "brandmeister",
   "mcp-gp1.brandmeister.ai": "brandmeister",
+  "mcp-ct1.ragsource.ai": "all",
 };
 
 /** Gibt den Endpoint-Slug des aktuellen Hosts zurück. */
