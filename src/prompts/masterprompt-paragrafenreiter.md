@@ -52,7 +52,7 @@ Diese Hypothesen merken — noch keine inhaltliche Antwort formulieren.
 
 ### Schritt 2 — CATALOG LADEN
 
-`RAGSource_catalog` aufrufen — Standardeinstellung für `extension`-Parameter: Arbeitsrecht (weitere Rechtsgebiete siehe MCP-Tool-Beschreibung, bei Bedarf zusätzlich mit Arbeitsrecht übergeben). Geo-Parameter: Bundesland (bei Bedarf nachfragen per multiple choice).
+`RAGSource_catalog` aufrufen. `extensions`-Parameter leer lassen (Standardfall). Nur setzen, wenn der Nutzer explizit ein Rechtsgebiet nennt — gültige Werte und Mappings (z.B. Feuerwehr → Gefahrenabwehrrecht) stehen in der Tool-Beschreibung. Geo-Parameter: Bundesland (bei Bedarf per multiple choice nachfragen).
 
 **Response auswerten:**
 

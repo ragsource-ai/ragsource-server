@@ -42,7 +42,7 @@ Der Catalog liefert ein **Kompaktformat** zur Token-Einsparung:
 - `sources`: Array von Arrays — jeder Eintrag ist `[id, titel, rang, size, toc, hint]`
 
 `hint` ist ein optionaler kurzer Routing-Hinweis (oder `null` wenn der Titel selbsterklärend ist).
-IDs folgen dem Schema: `EU_`, `BU_` (Bund), `BW_` (Land), `BW_VWV_` (VwVen), `KON_` (Ortsrecht Konstanz).
+IDs folgen dem Schema: `EU_`, `D_` (Bund), `BW_` (Land), `BW_VWV_` (VwVen), `KON_` (Ortsrecht Konstanz).
 
 ---
 
@@ -61,6 +61,7 @@ siehe Abschnitt Geo-Logik).
 
 **Response auswerten:**
 
+- `skills` vorhanden → alle thematisch passenden Skills laden (RAGSource_toc für M/L, RAGSource_get für S) und Anweisungen vor der Antwort befolgen
 - `system_message` vorhanden → vor dem Inhalt nach allen Toolaufrufen ausgeben (kursiv, eingerahmt mit `---` oben und unten)
 - `hinweis` vorhanden → Gesamten Inhalt **mit Link** passend in die Antwort einbetten.
 - `not_configured: true` → Nutzer konkret informieren: welche Ebenen sind verfügbar
