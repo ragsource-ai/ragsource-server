@@ -255,12 +255,13 @@ const INSTRUCTIONS =
   "Do not use if source is already known from catalog — prefer toc+get.\n" +
   "\n" +
   "Loading order — strictly follow:\n" +
-  "(1) Säule 1: load all relevant sources from catalog (laws, FwDVs, VwVen, ordinances) " +
-  "— RAGSource_toc for M/L, RAGSource_get for S.\n" +
-  "(2) Säule 2: load all relevant skills from catalog (typ: skill) " +
-  "— RAGSource_toc for M/L, RAGSource_get for S. " +
-  "Skills appear first in catalog response but are loaded second. " +
-  "Skills extend Säule-1 content with practitioner knowledge — no duplication.\n" +
+  "(1) Säule 1 ALWAYS REQUIRED: load all relevant legal sources from catalog " +
+  "(laws, FwDVen, VwVen, ordinances). RAGSource_toc for M/L, RAGSource_get for S. " +
+  "NEVER skip this step — even when relevant skills are present.\n" +
+  "(2) Säule 2: load relevant skills (typ: skill) IN ADDITION TO Säule 1, NEVER alone. " +
+  "Skills are practice supplements that REFERENCE the legal sources from (1) — " +
+  "they extend, they do not replace. The skill hint often lists 'Quellen: …' — " +
+  "those are mandatory companion sources to load from Säule 1.\n" +
   "(3) Säule 3: future local data.\n" +
   "\n" +
   "Norm hierarchy: higher-ranking law supersedes lower-ranking (e.g. federal > state). " +
@@ -569,8 +570,14 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     this.server.tool(
       "RAGSource_catalog",
       "STEP 1 — Required first call for every request. " +
-      "Returns available legal sources (EU to municipal level) and optional skills (LLM instructions). " +
-      "Skills (typ:skill): appear first in catalog; load with RAGSource_toc/get like any source, then follow their instructions before answering. " +
+      "Returns available legal sources (EU to municipal level) and optional skills (typ:skill). " +
+      "\n\n" +
+      "CRITICAL — Skill-Loading-Rule: Skills are practice supplements, NEVER substitutes for legal sources. " +
+      "Do NOT answer from skills alone. For every skill you load, ALSO load the underlying Säule-1 " +
+      "sources (FwDVen, Landesgesetze, Verordnungen) it references. The skill hint typically lists " +
+      "'Quellen: …' — these are the mandatory companion sources to load. If unsure which legal " +
+      "sources accompany a skill, load the skill first to read its 'Quellen'-section, then load those. " +
+      "\n\n" +
       "Routing by size: S → RAGSource_get directly; M/L → RAGSource_toc first, then RAGSource_get. " +
       "system_message in response: prepend verbatim as italicized system notice to the user.",
       {
