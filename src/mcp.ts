@@ -23,6 +23,7 @@ import type {
   QueryHit,
 } from "./types.js";
 import { resolveGeo, suggestGeo, type ResolvedGeo, type AmbiguousGeo, type GeoCandidate } from "./engine/normalize.js";
+import { resolveExtensions, buildExtensionsWarning, type ExtensionResolution } from "./engine/extensions.js";
 
 // -----------------------------------------------------------------------
 // Geo-Filter für die sources-Tabelle
@@ -524,16 +525,23 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           .array(z.string())
           .optional()
           .describe(
-            "Optional topic filters (OR-linked). Default: empty (all sources visible). " +
+            "Optional topic filters (OR-linked, additive). Default: empty (all sources visible). " +
             "Set only if user explicitly requests a topic scope. " +
+            "ONLY these 22 values are valid — never invent keywords or topic names. " +
             "Valid values: Verfassungsrecht, Zivilrecht, Familienrecht, Arbeitsrecht, " +
             "Handels- & Gesellschaftsrecht, Wirtschaftsrecht, Strafrecht & OWiG, " +
             "Verwaltungsrecht, Kommunalrecht, Baurecht, Gefahrenabwehrrecht, " +
             "Verkehrsrecht, Sozialrecht, Gesundheitsrecht, Steuer- & Abgabenrecht, " +
             "Umwelt- & Naturrecht, Datenschutz & IT-Recht, Bildungs- & Jugendrecht, " +
             "Europarecht, Vergabe & Beschaffung, Migrationsrecht, Notstandsrecht, universal. " +
-            "Mappings: Feuerwehr/Katastrophenschutz/Rettungsdienst/Polizeirecht → Gefahrenabwehrrecht; " +
-            "Beamtenrecht/Tarifrecht → Arbeitsrecht; Ortsrecht/Satzungen → Kommunalrecht.",
+            "Common mappings (server resolves automatically): " +
+            "Feuerwehr/Brandschutz/Polizei/Polizeirecht/Katastrophenschutz/Rettungsdienst → Gefahrenabwehrrecht; " +
+            "Beamtenrecht/Tarifrecht/TVöD → Arbeitsrecht; Ortsrecht/GemO/Kreisordnung → Kommunalrecht; " +
+            "Vergaberecht/GWB/VgV → Vergabe & Beschaffung; DSGVO/IT-Recht → Datenschutz & IT-Recht; " +
+            "Asylrecht/Aufenthaltsrecht → Migrationsrecht; Steuerrecht/Gebühren/KAG → Steuer- & Abgabenrecht. " +
+            "Server response shows extensions_resolved/_mapped/_ignored — if your input was mapped or ignored, " +
+            "use the resolved canonical value(s) on the next call. The server NEVER guesses — it maps known " +
+            "synonyms or rejects unknown inputs.",
           ),
       },
       { title: "RAGSource catalog", readOnlyHint: true, destructiveHint: false },
@@ -597,8 +605,14 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
 
         const geoFilter = geoSpecialFilter ?? buildGeoFilter(geo);
         const endpointFilter = buildEndpointFilter(resolveMandatoryEndpoint());
-        const effectiveExtensions = extensionsInput?.length ? extensionsInput : this._currentExtensions;
+        // Extension-Auflösung: rohe LLM-Eingabe → kanonische Taxonomie-Werte.
+        // Unbekanntes (z.B. "Feuerwehr", "Aufwandsentschädigung") wird gemappt
+        // (per Synonym/Prefix) oder ignoriert — niemals 1:1 in die SQL übernommen.
+        const rawExtensions = extensionsInput?.length ? extensionsInput : this._currentExtensions;
+        const extResolution = resolveExtensions(rawExtensions);
+        const effectiveExtensions = extResolution.resolved;
         const extensionsFilter = buildExtensionsFilter(effectiveExtensions);
+        const extWarning = buildExtensionsWarning(extResolution);
 
         // Quellen abfragen — alle Felder, die das LLM braucht
         // Wenn Extensions aktiv: additiv — Endpoint-Match ODER Extension-Match (OR-Verknüpfung).
@@ -697,6 +711,18 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
               `und verweise ihn auf die in der System Message verlinkte Projektseite für eine vollständig konfigurierte Instanz.`)
           : undefined;
 
+        // Extensions-Block für Response: zeigt dem LLM was effektiv galt
+        // und was umgemappt/ignoriert wurde — Lerneffekt für nächsten Aufruf.
+        const extensionsBlock = rawExtensions.length > 0
+          ? {
+              extensions_input: rawExtensions,
+              extensions_resolved: effectiveExtensions,
+              ...(extResolution.mapped.length > 0 && { extensions_mapped: extResolution.mapped }),
+              ...(extResolution.ignored.length > 0 && { extensions_ignored: extResolution.ignored }),
+              ...(extWarning && { extensions_warning: extWarning }),
+            }
+          : null;
+
         return {
           content: [
             {
@@ -704,6 +730,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
               text: JSON.stringify({
                 ...(systemMessage && { system_message: systemMessage }),
                 geo: geoInfo,
+                ...(extensionsBlock && extensionsBlock),
                 total: sorted.length,
                 ...(notConfigured && { not_configured: true, hinweis: notConfiguredHinweis }),
                 schema: ["id", "titel", "rang", "size", "toc", "hint"],
@@ -1053,8 +1080,12 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         const geo = (geoResult && "ambiguous" in geoResult ? null : geoResult) as ResolvedGeo | null;
         const geoFilter = buildGeoFilter(geo);
         const endpointFilter = buildEndpointFilter(resolveMandatoryEndpoint());
-        const effectiveExtensions = extensionsInput?.length ? extensionsInput : this._currentExtensions;
+        // Extension-Auflösung: gleiche Validierung wie in RAGSource_catalog
+        const rawExtensions = extensionsInput?.length ? extensionsInput : this._currentExtensions;
+        const extResolution = resolveExtensions(rawExtensions);
+        const effectiveExtensions = extResolution.resolved;
         const extensionsFilter = buildExtensionsFilter(effectiveExtensions);
+        const extWarning = buildExtensionsWarning(extResolution);
 
         // FTS5-Query bauen (Hauptquery + Hints zusammenführen)
         const allTerms = [query, ...(hints ?? [])].join(" ");
@@ -1143,6 +1174,16 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             }
           : { name: "alle Ebenen", level: "alle" };
 
+        const extensionsBlock = rawExtensions.length > 0
+          ? {
+              extensions_input: rawExtensions,
+              extensions_resolved: effectiveExtensions,
+              ...(extResolution.mapped.length > 0 && { extensions_mapped: extResolution.mapped }),
+              ...(extResolution.ignored.length > 0 && { extensions_ignored: extResolution.ignored }),
+              ...(extWarning && { extensions_warning: extWarning }),
+            }
+          : null;
+
         return {
           content: [
             {
@@ -1151,6 +1192,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
                 {
                   query,
                   geo: geoInfo,
+                  ...(extensionsBlock && extensionsBlock),
                   treffer: hits.length,
                   results: hits,
                 },
