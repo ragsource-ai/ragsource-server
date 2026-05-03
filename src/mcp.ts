@@ -22,7 +22,7 @@ import type {
   SectionResult,
   QueryHit,
 } from "./types.js";
-import { resolveGeo, type ResolvedGeo, type AmbiguousGeo } from "./engine/normalize.js";
+import { resolveGeo, suggestGeo, type ResolvedGeo, type AmbiguousGeo, type GeoCandidate } from "./engine/normalize.js";
 
 // -----------------------------------------------------------------------
 // Geo-Filter für die sources-Tabelle
@@ -232,20 +232,28 @@ function buildFtsQuery(input: string): string | null {
 const INSTRUCTIONS_DEFAULT =
   "RAGSource — Agentic RAG Framework.\n" +
   "\n" +
+  "DEFERRED TOOLS — do this first, before anything else:\n" +
+  "If any RAGSource tool is listed as deferred, call ToolSearch ONCE with:\n" +
+  "  { query: 'select:RAGSource_catalog,RAGSource_toc,RAGSource_get,RAGSource_query,RAGSource_db_query', max_results: 20 }\n" +
+  "This loads all tools from all connected servers in a single call. Never call ToolSearch again after this.\n" +
+  "\n" +
+  "MULTIPLE SERVERS — if more than one RAGSource server is connected:\n" +
+  "(1) System prompt or project context names a specific server → use only that server.\n" +
+  "(2) No server specified → call RAGSource_catalog on ALL connected RAGSource servers in parallel. Deduplicate results by source_id.\n" +
+  "\n" +
   "Workflow: RAGSource_catalog → RAGSource_toc (M/L) → RAGSource_get.\n" +
   "RAGSource_query as alternative when: (a) catalog returns no matching source, " +
   "(b) topic unclear and cross-source search is useful. " +
   "Do not use if source is already known from catalog — prefer toc+get.\n" +
   "\n" +
-  "Deferred tools: if tools are listed as deferred, first call " +
-  "ToolSearch with 'select:RAGSource_catalog,RAGSource_toc,RAGSource_get,RAGSource_query' — " +
-  "then call RAGSource_catalog.\n" +
-  "\n" +
-  "Skills (typ: skill): listed in catalog response before legal sources. " +
-  "Load all skills upfront and follow their instructions for tool use, decision trees, and domain workflows. " +
-  "Skills (tier 2) and the primary sources they reference (tier 1: laws, FwDVs, ordinances) only work together — " +
-  "always load all referenced sources from all tiers immediately. " +
-  "Load any additional sources mentioned in skills without waiting to be asked.\n" +
+  "Loading order — strictly follow:\n" +
+  "(1) Säule 1: load all relevant sources from catalog (laws, FwDVs, VwVen, ordinances) " +
+  "— RAGSource_toc for M/L, RAGSource_get for S.\n" +
+  "(2) Säule 2: load all relevant skills from catalog (typ: skill) " +
+  "— RAGSource_toc for M/L, RAGSource_get for S. " +
+  "Skills appear first in catalog response but are loaded second. " +
+  "Skills extend Säule-1 content with practitioner knowledge — no duplication.\n" +
+  "(3) Säule 3: future local data.\n" +
   "\n" +
   "Norm hierarchy: higher-ranking law supersedes lower-ranking (e.g. federal > state). " +
   "On conflicts: cite the higher-ranking norm and name the conflict.";
@@ -318,11 +326,11 @@ function buildGeoAnweisungen(): string {
     `Bitte das Tool mit dem passenden geo-Parameter erneut aufrufen:\n` +
     `• Nur EU- und Bundesrecht:  geo = "00"\n` +
     `• Gesamter Katalog (selten): geo = "full"\n` +
-    `• Landesrecht: geo = 2-stelliger ARS des Bundeslandes:\n${bundeslandListe}\n` +
-    `• Kommunale Fragen: geo = ARS der Gemeinde (12-stellig), des Gemeindeverbands (9) oder des Landkreises (5)\n\n` +
-    `Wenn aus dem Kontext eindeutig hervorgeht, welches Bundesland oder welche Gemeinde gemeint ist ` +
-    `(z.B. durch explizite Nennung im Gespräch), verwende den entsprechenden ARS-Code selbstständig. ` +
-    `Ist der Kontext unklar, frage per Multiple-Choice nach.\n\n` +
+    `• Landesrecht: geo = 2-stelliger ARS des Bundeslandes oder Bundesland-Klarname:\n${bundeslandListe}\n` +
+    `• Kommunale Fragen: geo = Klarname der Gemeinde (z.B. "Müllheim Markgräflerland") ` +
+    `oder ARS der Gemeinde (12-stellig), des Gemeindeverbands (9) oder des Landkreises (5)\n\n` +
+    `WICHTIG: Wenn der Klarname nicht eindeutig auflöst, frage den Nutzer per Multiple-Choice nach. ` +
+    `Erfinde oder rate KEINEN ARS-Code — falsche ARS-Werte führen zu falschen Quellen.\n\n` +
     `Hinweis an den Nutzer: Die Anfrage läuft beim nächsten Mal effizienter, wenn der MCP-Link ` +
     `über die in der System Message verlinkte Projektseite für den eigenen Geltungsbereich generiert wird — ` +
     `dann wird geo automatisch übergeben.`
@@ -349,52 +357,86 @@ function buildNoGeoResponse(
   };
 }
 
+/** Formatiert einen Kandidaten als Listenzeile mit Typ-Markierung */
+function formatCandidate(c: GeoCandidate): string {
+  const typLabel: Record<string, string> = {
+    gemeinde: "Gemeinde",
+    verband: "Verband",
+    kreis: "Landkreis",
+    land: "Bundesland",
+  };
+  const label = typLabel[c.typ] ?? c.typ;
+  const ctxParts: string[] = [];
+  if (c.typ === "gemeinde") {
+    if (c.kreis) ctxParts.push(`Lkr ${c.kreis}`);
+    if (c.land) ctxParts.push(c.land);
+  } else if (c.typ === "verband") {
+    if (c.kreis) ctxParts.push(`Lkr ${c.kreis}`);
+    if (c.land) ctxParts.push(c.land);
+  } else if (c.typ === "kreis") {
+    if (c.land) ctxParts.push(c.land);
+  }
+  const ctx = ctxParts.length > 0 ? ` (${ctxParts.join(", ")})` : "";
+  return `• [${label}] ${c.name}${ctx} — ARS: ${c.ars}`;
+}
+
 /**
  * Fehlermeldung wenn ein geo-Wert übergeben wurde, der nicht aufgelöst werden konnte.
+ * Liefert zusätzlich Top-N Prefix-Vorschläge (wenn vorhanden), damit das LLM dem Nutzer
+ * konkrete Alternativen anbieten kann statt ARS zu raten.
  */
-function buildGeoNotFoundResponse(
+async function buildGeoNotFoundResponse(
   input: string,
   systemMessage: string | null,
-): { content: Array<{ type: "text"; text: string }> } {
+  db: D1Database,
+): Promise<{ content: Array<{ type: "text"; text: string }> }> {
+  const suggestions = /^\d+$/.test(input.trim()) ? [] : await suggestGeo(input, db, 5);
+  const suggestionList = suggestions.length > 0
+    ? `\n\nÄhnliche Einträge — meintest du eine davon?\n${suggestions.map(formatCandidate).join("\n")}\n`
+    : "";
+
+  const payload = {
+    ...(systemMessage && { system_message: systemMessage }),
+    error: "geo_not_found",
+    geo: { name: `"${input}" (nicht gefunden)`, level: "unbekannt" },
+    ...(suggestions.length > 0 && { suggestions }),
+    hinweis:
+      `Der geo-Wert "${input}" konnte nicht aufgelöst werden.${suggestionList}\n` +
+      `Bitte den Nutzer fragen, welcher Geltungsbereich gemeint ist. ` +
+      `Erfinde oder rate KEINEN ARS-Code.\n\n` +
+      buildGeoAnweisungen(),
+  };
+
   return {
-    content: [{
-      type: "text" as const,
-      text: JSON.stringify({
-        ...(systemMessage && { system_message: systemMessage }),
-        error: "geo_not_found",
-        geo: { name: `"${input}" (nicht gefunden)`, level: "unbekannt" },
-        hinweis:
-          `Der geo-Wert "${input}" konnte nicht aufgelöst werden — diese ARS existiert nicht.\n\n` +
-          buildGeoAnweisungen(),
-      }),
-    }],
+    content: [{ type: "text" as const, text: JSON.stringify(payload) }],
   };
 }
 
 /**
  * Baut eine frühe MCP-Antwort für mehrdeutige Geo-Angaben.
- * Gibt eine Kandidatenliste + Support-Hinweis zurück, ohne Quellen zu liefern.
+ * Gibt eine Kandidatenliste mit Typ-Markierung (Gemeinde/Verband/Kreis/Land) zurück,
+ * ohne Quellen zu liefern.
  */
 function buildAmbiguousResponse(
   ambiguous: AmbiguousGeo,
   systemMessage: string | null,
 ): { content: Array<{ type: "text"; text: string }> } {
-  const list = ambiguous.candidates
-    .map((c) => {
-      const kreisLabel = c.kreis || `Lkr-ARS ${c.kreis_ars}`;
-      return `• ${c.name} — ${kreisLabel}, ${c.land} — ARS: ${c.ars}`;
-    })
-    .join("\n");
+  const list = ambiguous.candidates.map(formatCandidate).join("\n");
+  const truncatedNote = ambiguous.truncated
+    ? `\n\n(Liste auf ${ambiguous.candidates.length} Kandidaten begrenzt — falls die gesuchte Gemeinde fehlt, präziser fragen, z.B. mit Bundesland oder Landkreis: "${ambiguous.input}, Bayern".)`
+    : "";
 
   const payload = {
     ...(systemMessage && { system_message: systemMessage }),
     error: "geo_ambiguous",
     geo: { name: `"${ambiguous.input}" (mehrdeutig)`, level: "unbekannt" },
     hinweis:
-      `Der Ortsname "${ambiguous.input}" ist nicht eindeutig — es gibt mehrere Gemeinden mit diesem Namen. ` +
-      `Bitte den Nutzer fragen, welche Gemeinde gemeint ist, und den geo-Parameter mit dem entsprechenden ARS-Code erneut aufrufen.\n\n` +
-      `Gefundene Treffer:\n${list}\n\n` +
-      `Bei Fragen oder falls die gesuchte Gemeinde nicht aufgeführt ist: support@amtsschimmel.ai`,
+      `Der Geo-Name "${ambiguous.input}" ist nicht eindeutig — es gibt mehrere passende Einträge. ` +
+      `Bitte den Nutzer per Multiple-Choice fragen, welcher Eintrag gemeint ist, ` +
+      `und das Tool dann mit dem entsprechenden ARS-Code erneut aufrufen. ` +
+      `Erfinde oder rate KEINEN ARS-Code.\n\n` +
+      `Gefundene Treffer:\n${list}${truncatedNote}\n\n` +
+      `Bei Fragen oder falls der gesuchte Eintrag nicht aufgeführt ist: support@amtsschimmel.ai`,
     candidates: ambiguous.candidates,
   };
 
@@ -466,7 +508,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
       "RAGSource_catalog",
       "STEP 1 — Required first call for every request. " +
       "Returns available legal sources (EU to municipal level) and optional skills (LLM instructions). " +
-      "Skills (typ:skill): read and follow before proceeding. " +
+      "Skills (typ:skill): appear first in catalog; load with RAGSource_toc/get like any source, then follow their instructions before answering. " +
       "Routing by size: S → RAGSource_get directly; M/L → RAGSource_toc first, then RAGSource_get. " +
       "system_message in response: prepend verbatim as italicized system notice to the user.",
       {
@@ -476,14 +518,22 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           .optional()
           .describe(
             "ARS code (2=state, 5=district, 9=association, 12=municipality) or place name. " +
-            "Examples: '08' (BW), '08117' (LKR Göppingen), '081175009012' (Bad Boll).",
+            "Examples: '08' (BW), '09' (BY), '09162' (München, Kreis-Ebene), 'München' (Klarname).",
           ),
         extensions: z
           .array(z.string())
           .optional()
           .describe(
-            "Optional topic filters (OR-linked). Restricts catalog to matching sources. " +
-            "Examples: 'Feuerwehr', 'Arbeitsrecht', 'Datenschutz'. Empty = all sources.",
+            "Optional topic filters (OR-linked). Default: empty (all sources visible). " +
+            "Set only if user explicitly requests a topic scope. " +
+            "Valid values: Verfassungsrecht, Zivilrecht, Familienrecht, Arbeitsrecht, " +
+            "Handels- & Gesellschaftsrecht, Wirtschaftsrecht, Strafrecht & OWiG, " +
+            "Verwaltungsrecht, Kommunalrecht, Baurecht, Gefahrenabwehrrecht, " +
+            "Verkehrsrecht, Sozialrecht, Gesundheitsrecht, Steuer- & Abgabenrecht, " +
+            "Umwelt- & Naturrecht, Datenschutz & IT-Recht, Bildungs- & Jugendrecht, " +
+            "Europarecht, Vergabe & Beschaffung, Migrationsrecht, Notstandsrecht, universal. " +
+            "Mappings: Feuerwehr/Katastrophenschutz/Rettungsdienst/Polizeirecht → Gefahrenabwehrrecht; " +
+            "Beamtenrecht/Tarifrecht → Arbeitsrecht; Ortsrecht/Satzungen → Kommunalrecht.",
           ),
       },
       { title: "RAGSource catalog", readOnlyHint: true, destructiveHint: false },
@@ -541,7 +591,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
 
           // Fall b: ARS übergeben, aber nicht in der DB → früher Abbruch mit Anweisungen
           if (geo === null) {
-            return buildGeoNotFoundResponse(effectiveGeo, systemMessage);
+            return await buildGeoNotFoundResponse(effectiveGeo, systemMessage, db);
           }
         }
 
@@ -683,7 +733,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           .min(1)
           .max(8)
           .describe(
-            "Source IDs from RAGSource_catalog, e.g. ['FwG_BW', 'BBO_Satzung_Feuerwehr']. Max. 8 per call.",
+            "Source IDs from RAGSource_catalog, e.g. ['FwG_BW', 'D_BGB']. Max. 8 per call.",
           ),
         level: z
           .string()
@@ -777,10 +827,10 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     this.server.tool(
       "RAGSource_get",
       "STEP 3 — Loads original text of §§ from one or more legal sources. " +
+      "Batch multiple sources in one call for efficiency. " +
       "Use sections values exactly as returned by RAGSource_toc, e.g. '§ 2', 'Artikel 6'. " +
       "Limits: 8 sources / 25 §§ per source / 50 §§ total. " +
-      "Small sources: omit sections to load the complete document. " +
-      "Response includes 'quelle_url' for source citations.",
+      "Response includes 'quelle_url' for source citations — use as Markdown link in citations.",
       {
         sources: z
           .array(
@@ -794,7 +844,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
                 .optional()
                 .describe(
                   "Section references from RAGSource_toc, e.g. ['§ 2', '§ 8', 'Artikel 24']. " +
-                  "Omit to load the complete document (small sources only).",
+                  "Omit ONLY for S sources to load the full document. M/L sources always require section references from RAGSource_toc.",
                 ),
             }),
           )
@@ -972,18 +1022,22 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           .max(100)
           .optional()
           .describe(
-            "Geo filter: ARS code (2/5/9/12 digits) or place name. " +
-            "Examples: '08', '08117', '081175009012', 'Bad Boll'",
+            "Geo filter: ARS code (2=state, 5=district, 9=association, 12=municipality) or place name. " +
+            "Examples: '08' (BW), '09' (BY), '09162' (München, Kreis-Ebene), 'München' (Klarname).",
           ),
         extensions: z
           .array(z.string())
           .optional()
-          .describe("Optional topic filters (OR-linked). Empty = all sources."),
+          .describe(
+            "Optional topic filters (OR-linked). Default: empty. " +
+            "Same valid values and mappings as RAGSource_catalog extensions.",
+          ),
         hints: z
           .array(z.string())
           .optional()
           .describe(
-            "Additional search terms: synonyms, technical terms, related concepts",
+            "Additional search terms to improve recall: synonyms, technical terms, related concepts. " +
+            "E.g. for query 'Abwassergebühren': hints ['Entwässerungsbeitrag', 'Kanalgebühr', 'KAG'].",
           ),
       },
       { title: "RAGSource query", readOnlyHint: true, destructiveHint: false },

@@ -4,6 +4,16 @@
  * Eingabe: ARS-Code (nur Ziffern) oder Klarname/Alias (nicht-numerisch).
  * ARS-Länge bestimmt Ebene: 2=Land, 5=Kreis, 9=Verband, 12=Gemeinde.
  * Auflösung nur aufwärts — Gemeinde-ARS liefert auch Verband/Kreis/Land.
+ *
+ * Klarnamen-Lookup mehrstufig:
+ *   1. exakter Match in geo_aliases
+ *   2. exakter Match in gemeinden.name (mit Umlaut-Fallback)
+ *   3. Prefix-Match in gemeinden.name (z.B. "Müllheim" → "Müllheim im Markgräflerland, Stadt")
+ *   4. Multi-Token-AND-Match in gemeinden.name (z.B. "Müllheim Markgräflerland")
+ *   5. Token-Suche in gemeinden.kreis / .verband / .land (für "Konstanz" → Stadt + Kreis)
+ *   6. Optional eingeschränkt durch Ebenen-Hint ("Kreis", "Lkr", "Land", "Verband")
+ *
+ * Bei mehreren Kandidaten → AmbiguousGeo mit Typ-Markierung.
  */
 
 export type GeoLevel = "gemeinde" | "verband" | "kreis" | "land";
@@ -22,21 +32,63 @@ export interface ResolvedGeo {
   };
 }
 
+export interface GeoCandidate {
+  typ: GeoLevel;
+  name: string;
+  ars: string;
+  kreis: string | null;
+  kreis_ars: string | null;
+  verband: string | null;
+  verband_ars: string | null;
+  land: string | null;
+  land_ars: string | null;
+}
+
 export interface AmbiguousGeo {
   ambiguous: true;
   input: string;
-  candidates: Array<{ name: string; kreis: string; kreis_ars: string; land: string; land_ars: string; ars: string }>;
+  candidates: GeoCandidate[];
+  truncated: boolean;
 }
+
+// Maximale Kandidatenzahl in AmbiguousGeo-Antwort
+const MAX_CANDIDATES = 10;
+
+/** Stoppwörter für Tokenisierung — Präpositionen, Artikel, Connectoren */
+const STOP_WORDS = new Set([
+  "im", "in", "an", "am", "auf", "bei", "von", "vom",
+  "zu", "zur", "zum", "ob", "ueber",
+  "der", "die", "das", "den", "des", "dem",
+  "und", "oder", "&",
+]);
+
+/** Erstes Token als Ebenen-Hint → schränkt Suche auf eine Spalte ein */
+const LEVEL_HINTS: Record<string, GeoLevel> = {
+  "kreis": "kreis",
+  "kr": "kreis",
+  "lkr": "kreis",
+  "lkr.": "kreis",
+  "landkreis": "kreis",
+  "verband": "verband",
+  "gvv": "verband",
+  "gvb": "verband",
+  "vg": "verband",
+  "verbandsgemeinde": "verband",
+  "gemeindeverwaltungsverband": "verband",
+  "land": "land",
+  "bundesland": "land",
+  "stadt": "gemeinde",
+  "gemeinde": "gemeinde",
+};
 
 /**
  * Hauptfunktion: Löst einen `geo`-Parameter auf.
  *
  * - Nur Ziffern → ARS direkt, Ebene aus Länge
- * - Nicht-numerisch → geo_aliases Lookup (ohne typ-Filter)
- * - Kein Alias-Match → gemeinden.name exakter Lookup
- *   - 1 Treffer → direkt auflösen
- *   - >1 Treffer → AmbiguousGeo (Kandidatenliste)
- * - Kein Match → null
+ * - Nicht-numerisch → mehrstufiger Klarnamen-Lookup
+ *   - 0 Treffer → null
+ *   - 1 Treffer → ResolvedGeo (direkte Auflösung)
+ *   - >1 Treffer → AmbiguousGeo mit Kandidatenliste
  */
 export async function resolveGeo(
   input: string,
@@ -50,64 +102,261 @@ export async function resolveGeo(
     return resolveArsUpward(trimmed, db);
   }
 
-  // Nicht-numerisch → Alias-Lookup; Gemeinde wird bei Typ-Konflikt bevorzugt
+  // Nicht-numerisch → Alias-Lookup zuerst (schneller, exakte Treffer)
   const lower = trimmed.toLowerCase();
-  const exact = await db
-    .prepare("SELECT ars FROM geo_aliases WHERE alias = ? ORDER BY CASE typ WHEN 'gemeinde' THEN 0 WHEN 'verband' THEN 1 WHEN 'landkreis' THEN 2 ELSE 3 END LIMIT 1")
-    .bind(lower)
-    .first<{ ars: string }>();
+  const alias = await lookupAlias(lower, db);
+  if (alias) return resolveArsUpward(alias, db);
 
-  if (exact) {
-    return resolveArsUpward(exact.ars, db);
-  }
-
-  // Normalisiert versuchen
   const normalized = normalizeString(lower);
   if (normalized !== lower) {
-    const norm = await db
-      .prepare("SELECT ars FROM geo_aliases WHERE alias = ? ORDER BY CASE typ WHEN 'gemeinde' THEN 0 WHEN 'verband' THEN 1 WHEN 'landkreis' THEN 2 ELSE 3 END LIMIT 1")
-      .bind(normalized)
-      .first<{ ars: string }>();
-    if (norm) {
-      return resolveArsUpward(norm.ars, db);
+    const aliasNorm = await lookupAlias(normalized, db);
+    if (aliasNorm) return resolveArsUpward(aliasNorm, db);
+  }
+
+  // Kein Alias → mehrstufige Suche in gemeinden + abgeleitete Ebenen
+  const candidates = await searchByName(trimmed, db);
+
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidateToResolved(candidates[0]);
+
+  return {
+    ambiguous: true,
+    input: trimmed,
+    candidates: candidates.slice(0, MAX_CANDIDATES),
+    truncated: candidates.length > MAX_CANDIDATES,
+  };
+}
+
+/** Vorschläge für eine nicht auflösbare Eingabe (Top-N Prefix-Treffer) */
+export async function suggestGeo(input: string, db: D1Database, limit = 5): Promise<GeoCandidate[]> {
+  const trimmed = input.trim();
+  if (!trimmed || /^\d+$/.test(trimmed)) return [];
+
+  const lower = trimmed.toLowerCase();
+  const normalized = normalizeString(lower);
+  const firstToken = lower.split(/[\s,]+/)[0] ?? lower;
+  const firstTokenN = normalizeString(firstToken);
+
+  // Suche das erste Wort als Prefix in allen vier Spalten
+  const sql = `
+    SELECT 'gemeinde' AS typ, ars, name, kreis, kreis_ars, verband, verband_ars, land, land_ars
+      FROM gemeinden
+     WHERE LOWER(name) LIKE ? OR LOWER(name) LIKE ?
+     LIMIT ?
+  `;
+  const rows = await db
+    .prepare(sql)
+    .bind(`${firstToken}%`, `${firstTokenN}%`, limit)
+    .all<GeoCandidate>();
+  return rows.results ?? [];
+}
+
+// -----------------------------------------------------------------------
+// Klarnamen-Suche (mehrstufig, parallel)
+// -----------------------------------------------------------------------
+
+interface LookupParts {
+  lower: string;          // Original lowercase
+  normalized: string;     // Umlaut-normalisiert
+  tokens: string[];       // Lowercase Tokens, Stoppwörter raus
+  tokensNorm: string[];   // Tokens umlaut-normalisiert
+  levelHint: GeoLevel | null;
+}
+
+function prepareLookup(input: string): LookupParts | null {
+  const lowerRaw = input.toLowerCase().trim();
+  if (!lowerRaw) return null;
+
+  // Tokenisierung: Whitespace + Komma/Semikolon/Punkt/Klammer als Trenner
+  const allTokens = lowerRaw
+    .replace(/[,;\.\(\)\/]/g, " ")
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2 && !STOP_WORDS.has(t));
+
+  if (allTokens.length === 0) return null;
+
+  // Ebenen-Hint: erstes Token wenn es ein Hint ist → strippen
+  let levelHint: GeoLevel | null = null;
+  let tokens = allTokens;
+  const firstHint = LEVEL_HINTS[allTokens[0]];
+  if (firstHint && allTokens.length > 1) {
+    levelHint = firstHint;
+    tokens = allTokens.slice(1);
+  }
+
+  // lower/normalized aus den verbleibenden Tokens rebauen, damit exact/prefix-Match
+  // bei Level-Hint nicht mehr das gestrippte Wort enthält
+  // ("Kreis Konstanz" → tokens=["konstanz"], lower="konstanz", nicht "kreis konstanz")
+  const lower = tokens.join(" ");
+  const normalized = normalizeString(lower);
+  const tokensNorm = tokens.map((t) => normalizeString(t));
+
+  return { lower, normalized, tokens, tokensNorm, levelHint };
+}
+
+async function searchByName(input: string, db: D1Database): Promise<GeoCandidate[]> {
+  const parts = prepareLookup(input);
+  if (!parts) return [];
+
+  const targets: GeoLevel[] = parts.levelHint
+    ? [parts.levelHint]
+    : ["gemeinde", "kreis", "verband", "land"];
+
+  const queries = targets.map((typ) => searchInTarget(typ, parts, db));
+  const results = await Promise.all(queries);
+
+  const seen = new Set<string>();
+  const merged: GeoCandidate[] = [];
+  for (const arr of results) {
+    for (const c of arr) {
+      const key = `${c.typ}::${c.ars}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(c);
+      if (merged.length > MAX_CANDIDATES) return merged; // truncated
+    }
+  }
+  return merged;
+}
+
+/**
+ * Sucht in einer Geo-Ebene (Gemeinde/Kreis/Verband/Land).
+ * Pro Ebene: exakter Match + Prefix-Match + (bei >1 Token) Multi-Token-AND.
+ */
+async function searchInTarget(
+  typ: GeoLevel,
+  p: LookupParts,
+  db: D1Database,
+): Promise<GeoCandidate[]> {
+  // Spalte und SELECT-Felder pro Ebene
+  let col: string;
+  let fromClause: string;
+  let baseSelect: string;
+
+  switch (typ) {
+    case "gemeinde":
+      col = "name";
+      fromClause = "gemeinden";
+      baseSelect = "ars, name, kreis, kreis_ars, verband, verband_ars, land, land_ars";
+      break;
+    case "kreis":
+      col = "kreis";
+      // DISTINCT pro Kreis-ARS (1 Repräsentant)
+      fromClause = "(SELECT kreis_ars AS ars, kreis AS name, kreis, kreis_ars, NULL AS verband, NULL AS verband_ars, land, land_ars FROM gemeinden GROUP BY kreis_ars)";
+      baseSelect = "ars, name, kreis, kreis_ars, verband, verband_ars, land, land_ars";
+      break;
+    case "verband":
+      col = "name";
+      fromClause = "(SELECT verband_ars AS ars, verband AS name, kreis, kreis_ars, verband, verband_ars, land, land_ars FROM gemeinden WHERE verband_ars IS NOT NULL GROUP BY verband_ars)";
+      baseSelect = "ars, name, kreis, kreis_ars, verband, verband_ars, land, land_ars";
+      break;
+    case "land":
+      col = "name";
+      fromClause = "(SELECT land_ars AS ars, land AS name, NULL AS kreis, NULL AS kreis_ars, NULL AS verband, NULL AS verband_ars, land, land_ars FROM gemeinden GROUP BY land_ars)";
+      baseSelect = "ars, name, kreis, kreis_ars, verband, verband_ars, land, land_ars";
+      break;
+  }
+
+  const conditions: string[] = [];
+  const params: string[] = [];
+
+  // Exakt-Match (lower + ggf. normalisiert)
+  conditions.push(`LOWER(${col}) = ?`);
+  params.push(p.lower);
+  if (p.normalized !== p.lower) {
+    conditions.push(`LOWER(${col}) = ?`);
+    params.push(p.normalized);
+  }
+
+  // Prefix-Match
+  conditions.push(`LOWER(${col}) LIKE ?`);
+  params.push(`${p.lower}%`);
+  if (p.normalized !== p.lower) {
+    conditions.push(`LOWER(${col}) LIKE ?`);
+    params.push(`${p.normalized}%`);
+  }
+
+  // Multi-Token-AND (nur wenn mehr als 1 Token)
+  if (p.tokens.length > 1) {
+    const andClauses = p.tokens.map(() => `LOWER(${col}) LIKE ?`);
+    conditions.push(`(${andClauses.join(" AND ")})`);
+    for (const t of p.tokens) params.push(`%${t}%`);
+
+    if (p.tokensNorm.some((t, i) => t !== p.tokens[i])) {
+      const andClausesN = p.tokensNorm.map(() => `LOWER(${col}) LIKE ?`);
+      conditions.push(`(${andClausesN.join(" AND ")})`);
+      for (const t of p.tokensNorm) params.push(`%${t}%`);
     }
   }
 
-  // Kein Alias-Treffer → gemeinden.name exakter Lookup (case-insensitive)
-  // Beide Varianten probieren: Originalschreibung + normalisiert (Umlaut-Fallback)
-  type GemeindeRow = { ars: string; name: string; kreis: string; land: string; land_ars: string };
-  const nameQuery = "SELECT ars, name, kreis, land, land_ars FROM gemeinden WHERE LOWER(name) = ? LIMIT 20";
+  const sql = `
+    SELECT '${typ}' AS typ, ${baseSelect}
+    FROM ${fromClause}
+    WHERE ${conditions.join(" OR ")}
+    LIMIT ${MAX_CANDIDATES + 1}
+  `;
 
-  let rows: GemeindeRow[] = [];
-  const r1 = await db.prepare(nameQuery).bind(lower).all<GemeindeRow>();
-  rows = r1.results ?? [];
-
-  if (rows.length === 0 && normalized !== lower) {
-    const r2 = await db.prepare(nameQuery).bind(normalized).all<GemeindeRow>();
-    rows = r2.results ?? [];
-  }
-
-  if (rows.length === 1) {
-    return resolveArsUpward(rows[0].ars, db);
-  }
-
-  if (rows.length > 1) {
-    return {
-      ambiguous: true,
-      input: trimmed,
-      candidates: rows.map((r) => ({
-        name: r.name,
-        kreis: r.kreis,
-        kreis_ars: r.ars.slice(0, 5),
-        land: r.land,
-        land_ars: r.land_ars,
-        ars: r.ars,
-      })),
-    };
-  }
-
-  return null;
+  type Row = Omit<GeoCandidate, "typ">;
+  const result = await db.prepare(sql).bind(...params).all<Row>();
+  return (result.results ?? []).map((r) => ({ ...r, typ }));
 }
+
+async function lookupAlias(alias: string, db: D1Database): Promise<string | null> {
+  const row = await db
+    .prepare(
+      "SELECT ars FROM geo_aliases WHERE alias = ? ORDER BY CASE typ WHEN 'gemeinde' THEN 0 WHEN 'verband' THEN 1 WHEN 'landkreis' THEN 2 ELSE 3 END LIMIT 1",
+    )
+    .bind(alias)
+    .first<{ ars: string }>();
+  return row?.ars ?? null;
+}
+
+/** Direkter Bau eines ResolvedGeo aus einem GeoCandidate ohne weiteren DB-Roundtrip */
+function candidateToResolved(c: GeoCandidate): ResolvedGeo {
+  switch (c.typ) {
+    case "gemeinde":
+      return {
+        level: "gemeinde",
+        land_ars: c.land_ars,
+        kreis_ars: c.kreis_ars,
+        verband_ars: c.verband_ars,
+        gemeinde_ars: c.ars,
+        display: { name: c.name, verband: c.verband, kreis: c.kreis, land: c.land },
+      };
+    case "verband":
+      return {
+        level: "verband",
+        land_ars: c.land_ars,
+        kreis_ars: c.kreis_ars,
+        verband_ars: c.ars,
+        gemeinde_ars: null,
+        display: { name: c.verband ?? c.name, verband: c.verband, kreis: c.kreis, land: c.land },
+      };
+    case "kreis":
+      return {
+        level: "kreis",
+        land_ars: c.land_ars,
+        kreis_ars: c.ars,
+        verband_ars: null,
+        gemeinde_ars: null,
+        display: { name: c.kreis ?? c.name, verband: null, kreis: c.kreis, land: c.land },
+      };
+    case "land":
+      return {
+        level: "land",
+        land_ars: c.ars,
+        kreis_ars: null,
+        verband_ars: null,
+        gemeinde_ars: null,
+        display: { name: c.land ?? c.name, verband: null, kreis: null, land: c.land },
+      };
+  }
+}
+
+// -----------------------------------------------------------------------
+// ARS-Auflösung
+// -----------------------------------------------------------------------
 
 /**
  * Löst einen ARS-Code aufwärts auf: Gemeinde → Verband → Kreis → Land.
