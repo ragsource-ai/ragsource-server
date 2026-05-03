@@ -155,7 +155,7 @@ export async function suggestGeo(input: string, db: D1Database, limit = 5): Prom
 // Klarnamen-Suche (mehrstufig, parallel)
 // -----------------------------------------------------------------------
 
-interface LookupParts {
+export interface LookupParts {
   lower: string;          // Original lowercase
   normalized: string;     // Umlaut-normalisiert
   tokens: string[];       // Lowercase Tokens, Stoppwörter raus
@@ -163,7 +163,7 @@ interface LookupParts {
   levelHint: GeoLevel | null;
 }
 
-function prepareLookup(input: string): LookupParts | null {
+export function prepareLookup(input: string): LookupParts | null {
   const lowerRaw = input.toLowerCase().trim();
   if (!lowerRaw) return null;
 

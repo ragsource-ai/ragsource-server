@@ -15,7 +15,8 @@ export interface Env {
   /** Strukturierte Datenbanken (Gefahrstoffe, Personal etc.) — optional, aktiviert RAGSource_db_query. */
   DB_STRUCTURED?: D1Database;
   MCP_OBJECT: DurableObjectNamespace;
-  CONFIG?: KVNamespace;
+  /** KV-Namespace für OAuth-State (oauth:*) und optionalen Wartungsbanner (system_message). Wird in allen Deployments gebunden. */
+  CONFIG: KVNamespace;
   RATE_LIMITER: RateLimiter;
   /** Wenn "true": RAGSource_query wird nicht registriert (Compliance-Modus) */
   DISABLE_QUERY?: string;

@@ -11,7 +11,7 @@
     "db:seed:local": "tsx scripts/build-db-v2.ts --local",
     "db:seed:remote": "node --env-file=.env --import tsx/esm scripts/build-db-v2.ts --remote",
     "db:seed:remote:content": "node --env-file=.env --import tsx/esm scripts/build-db-v2.ts --remote --skip-gemeinden",
-    "test": "node --import tsx/esm --test scripts/sql-utils.test.ts"
+    "test": "node --import tsx/esm --test scripts/sql-utils.test.ts src/engine/extensions.test.ts src/engine/normalize.test.ts"
   },
   "dependencies": {
     "agents": "^0.7.9",
