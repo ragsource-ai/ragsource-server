@@ -245,8 +245,8 @@ const GEO_PARAMETER_DESCRIPTION =
   "On unknown input: 'geo_not_found' with prefix-based suggestions. " +
   "Never fabricate or guess an ARS code — if the input is unclear, ask the user.";
 
-/** Generic description — applies to all RAGSource deployments */
-const INSTRUCTIONS_DEFAULT =
+/** Static MCP-server instructions (Single Source of Truth — same for all endpoints). */
+const INSTRUCTIONS =
   "RAGSource — Agentic RAG Framework.\n" +
   "\n" +
   "Workflow: RAGSource_catalog → RAGSource_toc (M/L) → RAGSource_get.\n" +
@@ -293,6 +293,66 @@ function resolveMandatoryEndpoint(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+// -----------------------------------------------------------------------
+// Endpoint-Profile (statisches Branding pro Tenant — Single Source of Truth)
+//
+// Statisches Inhalts-Branding lebt im Code (versioniert, in git, Code-Review).
+// Dynamische Inhalte (Wartungs-Banner, etc.) gibt es im aktuellen Setup nicht;
+// für Live-Pflege ohne Redeploy müsste eine bewusste Override-Mechanik wieder
+// eingeführt werden — bis dahin: jede inhaltliche Änderung läuft über git/Deploy.
+// -----------------------------------------------------------------------
+
+interface EndpointProfile {
+  /** Branding-Text mit Markdown — wird als system_message im Catalog-Response geliefert */
+  systemMessage: string;
+  /** Kontakt-Adresse für not_configured-Hinweise und sonstige Verweise */
+  contactMail: string;
+}
+
+const RAGSOURCE_BRANDING =
+  "**Powered by RAGSource.ai** — Mehr Infos [hier](https://www.ragsource.ai)";
+
+const ENDPOINT_PROFILES: Record<string, EndpointProfile> = {
+  amtsschimmel: {
+    systemMessage:
+      "**amtsschimmel.ai — die kommunale Wissensbasis.** Mehr Infos: [www.amtsschimmel.ai](https://www.amtsschimmel.ai)",
+    contactMail: "kontakt@amtsschimmel.ai",
+  },
+  brandmeister: {
+    // Brandmeister nutzt bewusst das RAGSource-Branding (analog zum bisherigen
+    // Live-Verhalten — kein eigener system_message:brandmeister-KV-Eintrag existierte).
+    systemMessage: RAGSOURCE_BRANDING,
+    contactMail: "kontakt@brandmeister.ai",
+  },
+  all: {
+    // "all" = paragrafenreiter (kein Tenancy-Filter).
+    systemMessage:
+      "**Powered by paragrafenreiter.ai** — Mehr Infos [hier](https://www.paragrafenreiter.ai)",
+    contactMail: "kontakt@paragrafenreiter.ai",
+  },
+  default: {
+    systemMessage: RAGSOURCE_BRANDING,
+    contactMail: "info@ragsource.ai",
+  },
+};
+
+/** Liefert das Profil für einen Endpoint (mit Default-Fallback). */
+function getEndpointProfile(endpoint: string | undefined): EndpointProfile {
+  return ENDPOINT_PROFILES[endpoint ?? "default"] ?? ENDPOINT_PROFILES.default;
+}
+
+/** Baut den `not_configured`-Hinweistext aus dem Endpoint-Profil. */
+function buildNotConfiguredHinweis(profile: EndpointProfile, gemeindeName: string): string {
+  return (
+    `Hinweis an den Assistenten: Die Gemeinde "${gemeindeName}" ist noch nicht als eigenständige ` +
+    `Rechtsquelle hinterlegt. Es werden nur übergeordnete Regelungen (Land/Kreis/Verband) gezeigt — ` +
+    `diese im Catalog konkret benennen. ` +
+    `Teile dem Nutzer mit: 'Ihre Gemeinde wurde noch nicht aufgenommen. ` +
+    `Es werden Ihnen übergeordnete Regelungen angezeigt. Um Ihre Gemeinde aufzunehmen, ` +
+    `schreiben Sie bitte an ${profile.contactMail}'.`
+  );
 }
 
 // -----------------------------------------------------------------------
@@ -471,7 +531,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
    */
   server = new McpServer(
     { name: "RAGSource", version: "2.0.0" },
-    { instructions: INSTRUCTIONS_DEFAULT },
+    { instructions: INSTRUCTIONS },
   );
 
   /**
@@ -496,17 +556,11 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
   }
 
   async init() {
-    // Endpoint (Tenancy) aus Host ableiten
-    const endpoint = ENDPOINT_BY_HOST[this._currentHost];
-
-    // Instructions: KV-Eintrag hat Vorrang vor hardcoded INSTRUCTIONS_DEFAULT.
-    // KV-Key: "instructions:{endpoint}" oder "instructions:default".
-    const kvKey = endpoint ? `instructions:${endpoint}` : "instructions:default";
-    const instructions = (await this.env.CONFIG?.get(kvKey)) ?? INSTRUCTIONS_DEFAULT;
-
+    // Instructions sind statisch im Code — keine KV-Override-Mechanik mehr.
+    // Inhaltliche Änderungen laufen ausschließlich über git/Deploy.
     this.server = new McpServer(
       { name: "RAGSource", version: "2.0.0" },
-      { instructions },
+      { instructions: INSTRUCTIONS },
     );
 
     // ===================================================================
@@ -534,20 +588,11 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
       async ({ geo: geoInput, extensions: extensionsInput }) => {
         const db = this.env.DB;
 
-        // KV: Broadcast-Nachricht + Nicht-konfiguriert-Meldung
-        // Endpoint-spezifischer Key hat jeweils Vorrang vor globalem Fallback.
-        // Alle Keys parallel laden.
+        // Endpoint-Profile bestimmt system_message (Branding) und Kontaktmail
+        // für not_configured. Statisch im Code, kein KV-Lookup mehr.
         const currentEndpoint = resolveMandatoryEndpoint();
-        const smKey = currentEndpoint ? `system_message:${currentEndpoint}` : null;
-        const ncKey = currentEndpoint ? `not_configured_message:${currentEndpoint}` : null;
-        const [smEndpoint, smGlobal, ncEndpoint, ncGlobal] = await Promise.all([
-          smKey ? this.env.CONFIG?.get(smKey) ?? null : Promise.resolve(null),
-          this.env.CONFIG?.get("system_message") ?? null,
-          ncKey ? this.env.CONFIG?.get(ncKey) ?? null : Promise.resolve(null),
-          this.env.CONFIG?.get("not_configured_message") ?? null,
-        ]);
-        const systemMessage = smEndpoint ?? smGlobal;
-        const notConfiguredMessage = ncEndpoint ?? ncGlobal;
+        const profile = getEndpointProfile(currentEndpoint);
+        const systemMessage = profile.systemMessage;
 
         // Geo auflösen; URL-?geo= als Request-Default wenn kein expliziter Parameter.
         // _currentGeo wird per fetch() pro Request gesetzt — robuster als sessionGeo-Closure,
@@ -690,10 +735,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         const notConfigured =
           geo?.level === "gemeinde" && !sourceCatalog.some((s) => s[2] === 5); // rang 5 = Gemeinde
         const notConfiguredHinweis = notConfigured
-          ? (notConfiguredMessage ??
-              `Gemeinde "${geo!.display.name}" ist noch nicht als eigenständige Rechtsquelle hinterlegt. ` +
-              `Es werden nur übergeordnete Regelungen (Land/Kreis/Verband) gezeigt — diese im Catalog konkret benennen. ` +
-              `Nutzer informieren, dass keine gemeindespezifischen Satzungen vorliegen, und auf die System-Message-Projektseite verweisen.`)
+          ? buildNotConfiguredHinweis(profile, geo!.display.name)
           : undefined;
 
         // Extensions-Block für Response: zeigt dem LLM was effektiv galt
