@@ -18,7 +18,7 @@ RAGSource trennt **Code** und **Inhalt** sauber in zwei öffentliche Repositorie
 | Repository | Inhalt |
 |---|---|
 | **ragsource-server** ← du bist hier | Worker-Code, Build-Pipeline, CI/CD, Datenbankschema |
-| [**ragsource-content**](https://github.com/ragsource-ai/ragsource-content) | Rechtstexte, Skills, Policies — öffentliche Wissensbasis (621+ Quellen) |
+| [**ragsource-content**](https://github.com/ragsource-ai/ragsource-content) | Rechtstexte, Skills, Policies — öffentliche Wissensbasis (1.005 Quellen / 38.515 §§) |
 
 Inhalt fließt über einen `repository_dispatch`-Trigger automatisch in die Datenbank: Push auf `ragsource-content` → DB-Rebuild → live in ~2 Minuten.
 
@@ -94,9 +94,17 @@ ragsource-server/
 |---|---|
 | `RAGSource_catalog` | Pflichtaufruf: verfügbare Wissensquellen für eine Gemeinde/Region |
 | `RAGSource_toc` | Inhaltsverzeichnis einer oder mehrerer Quellen (Batch, max. 8) |
-| `RAGSource_get` | Originalwortlaut spezifischer Paragraphen (max. 50 §§ pro Aufruf) |
+| `RAGSource_get` | Originalwortlaut spezifischer Paragraphen (max. 8 Quellen / 25 §§ pro Quelle / 50 §§ gesamt) |
 | `RAGSource_query` | FTS5-Volltextsuche (Fallback; deaktivierbar mit `DISABLE_QUERY=true`) |
-| `RAGSource_db_query` | Strukturierter DB-Layer für tabellarische Nachschlagewerke (z.B. Gefahrstoffe) |
+| `RAGSource_db_query` | Strukturierter DB-Layer für tabellarische Nachschlagewerke (nur wenn `DB_STRUCTURED` gebunden) |
+
+### Server-seitige Validierung
+
+Der Server validiert LLM-Eingaben gegen die jeweiligen Vokabulare und liefert strukturiertes Feedback im Response, statt ungeprüft in die SQL zu reichen:
+
+- **`geo`-Lookup mehrstufig** — ARS-Code oder Klarname mit Multi-Token-Disambiguierung (`"Müllheim Markgräflerland"`) und Ebenen-Hint-Präfixen (`"Kreis Konstanz"`, `"Land Bayern"`). Bei Mehrdeutigkeit `geo_ambiguous` mit typisierter Kandidatenliste; bei unbekanntem Wert `geo_not_found` mit Prefix-Vorschlägen.
+- **`extensions`-Validierung** — gegen 22-Werte-Rechtsgebiete-Taxonomie + ~80 Synonym-Mappings (`Feuerwehr → Gefahrenabwehrrecht`, `DSGVO → Datenschutz & IT-Recht`). Response zeigt `extensions_resolved/_mapped/_ignored`.
+- **Skill-Loading-Rule** — Tool-Description und INSTRUCTIONS fordern explizit, Skills nur mit den referenzierten Säule-1-Quellen zu laden.
 
 ### Agentic Workflow
 
