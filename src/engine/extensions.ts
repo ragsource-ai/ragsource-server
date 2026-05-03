@@ -332,6 +332,30 @@ export function resolveExtensions(inputs: readonly string[]): ExtensionResolutio
 }
 
 /**
+ * Tool-Description für den `extensions`-Parameter (zentral, von catalog + query genutzt).
+ * 21 Rechtsgebiete + Mappings + Server-Feedback-Loop. `universal` ist intern
+ * (Frontmatter-Tag für immer-sichtbare Quellen) und nicht für LLM-Eingabe gedacht.
+ */
+export const EXTENSIONS_PARAMETER_DESCRIPTION =
+  "Optional topic filters (OR-linked, additive). Default: empty (all sources visible). " +
+  "Set only if user explicitly requests a topic scope. " +
+  "ONLY these 21 values are valid — never invent keywords or topic names. " +
+  "Valid values: Verfassungsrecht, Zivilrecht, Familienrecht, Arbeitsrecht, " +
+  "Handels- & Gesellschaftsrecht, Wirtschaftsrecht, Strafrecht & OWiG, " +
+  "Verwaltungsrecht, Kommunalrecht, Baurecht, Gefahrenabwehrrecht, " +
+  "Verkehrsrecht, Sozialrecht, Gesundheitsrecht, Steuer- & Abgabenrecht, " +
+  "Umwelt- & Naturrecht, Datenschutz & IT-Recht, Bildungs- & Jugendrecht, " +
+  "Europarecht, Vergabe & Beschaffung, Migrationsrecht, Notstandsrecht. " +
+  "Common mappings (server resolves automatically): " +
+  "Feuerwehr/Brandschutz/Polizei/Polizeirecht/Katastrophenschutz/Rettungsdienst → Gefahrenabwehrrecht; " +
+  "Beamtenrecht/Tarifrecht/TVöD → Arbeitsrecht; Ortsrecht/GemO/Kreisordnung → Kommunalrecht; " +
+  "Vergaberecht/GWB/VgV → Vergabe & Beschaffung; DSGVO/IT-Recht → Datenschutz & IT-Recht; " +
+  "Asylrecht/Aufenthaltsrecht → Migrationsrecht; Steuerrecht/Gebühren/KAG → Steuer- & Abgabenrecht. " +
+  "Server response shows extensions_resolved/_mapped/_ignored — if your input was mapped or ignored, " +
+  "use the resolved canonical value(s) on the next call. The server NEVER guesses — it maps known " +
+  "synonyms or rejects unknown inputs.";
+
+/**
  * Erzeugt einen kompakten Hinweistext für die Catalog-/Query-Antwort,
  * wenn Extensions umgemappt oder ignoriert wurden.
  * Gibt null zurück wenn nichts zu sagen ist.

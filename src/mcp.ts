@@ -23,7 +23,7 @@ import type {
   QueryHit,
 } from "./types.js";
 import { resolveGeo, suggestGeo, type ResolvedGeo, type AmbiguousGeo, type GeoCandidate } from "./engine/normalize.js";
-import { resolveExtensions, buildExtensionsWarning, type ExtensionResolution } from "./engine/extensions.js";
+import { resolveExtensions, buildExtensionsWarning, EXTENSIONS_PARAMETER_DESCRIPTION, type ExtensionResolution } from "./engine/extensions.js";
 
 // -----------------------------------------------------------------------
 // Geo-Filter für die sources-Tabelle
@@ -229,18 +229,25 @@ function buildFtsQuery(input: string): string | null {
 // Vollständige Masterprompts → src/prompts/*.md (Claude.ai Projekt-System-Prompt)
 // -----------------------------------------------------------------------
 
+/**
+ * Tool-Description für den `geo`-Parameter (zentral, von catalog + query genutzt).
+ * Deckt ARS-Codes, Klarnamen, Multi-Token-Disambiguierung, Ebenen-Hints,
+ * Sonderwerte und das Verhalten bei Mehrdeutigkeit / Unbekanntem ab.
+ */
+const GEO_PARAMETER_DESCRIPTION =
+  "Geographic scope. Accepts ARS code or plain name. " +
+  "ARS lengths: 2-digit (state), 5-digit (district), 9-digit (association), 12-digit (municipality). " +
+  "Examples: '08' (BW), '083155012074', 'Müllheim Markgräflerland', 'Lkr Göppingen', 'Bayern', 'Breisgau-Hochschwarzwald'. " +
+  "Multi-word names disambiguate automatically: 'Müllheim Markgräflerland' resolves uniquely to the only Müllheim with 'Markgräflerland' in its name. " +
+  "Level-hint prefixes supported: 'Kreis X' / 'Lkr X' / 'Landkreis X' for district, 'Verband X' / 'GVV X' for association, 'Land X' / 'Bundesland X' for state. " +
+  "Special values: '00' = EU + federal law only (no regional sources); 'full' = entire catalog (rare, only if no geo applies). " +
+  "On ambiguous input the response returns 'geo_ambiguous' with a typed candidate list (typ: gemeinde/verband/kreis/land) — present these to the user as multiple-choice and re-call with the chosen ARS. " +
+  "On unknown input: 'geo_not_found' with prefix-based suggestions. " +
+  "Never fabricate or guess an ARS code — if the input is unclear, ask the user.";
+
 /** Generic description — applies to all RAGSource deployments */
 const INSTRUCTIONS_DEFAULT =
   "RAGSource — Agentic RAG Framework.\n" +
-  "\n" +
-  "DEFERRED TOOLS — do this first, before anything else:\n" +
-  "If any RAGSource tool is listed as deferred, call ToolSearch ONCE with:\n" +
-  "  { query: 'select:RAGSource_catalog,RAGSource_toc,RAGSource_get,RAGSource_query,RAGSource_db_query', max_results: 20 }\n" +
-  "This loads all tools from all connected servers in a single call. Never call ToolSearch again after this.\n" +
-  "\n" +
-  "MULTIPLE SERVERS — if more than one RAGSource server is connected:\n" +
-  "(1) System prompt or project context names a specific server → use only that server.\n" +
-  "(2) No server specified → call RAGSource_catalog on ALL connected RAGSource servers in parallel. Deduplicate results by source_id.\n" +
   "\n" +
   "Workflow: RAGSource_catalog → RAGSource_toc (M/L) → RAGSource_get.\n" +
   "RAGSource_query as alternative when: (a) catalog returns no matching source, " +
@@ -517,32 +524,11 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           .string()
           .max(100)
           .optional()
-          .describe(
-            "ARS code (2=state, 5=district, 9=association, 12=municipality) or place name. " +
-            "Examples: '08' (BW), '09' (BY), '09162' (München, Kreis-Ebene), 'München' (Klarname).",
-          ),
+          .describe(GEO_PARAMETER_DESCRIPTION),
         extensions: z
           .array(z.string())
           .optional()
-          .describe(
-            "Optional topic filters (OR-linked, additive). Default: empty (all sources visible). " +
-            "Set only if user explicitly requests a topic scope. " +
-            "ONLY these 22 values are valid — never invent keywords or topic names. " +
-            "Valid values: Verfassungsrecht, Zivilrecht, Familienrecht, Arbeitsrecht, " +
-            "Handels- & Gesellschaftsrecht, Wirtschaftsrecht, Strafrecht & OWiG, " +
-            "Verwaltungsrecht, Kommunalrecht, Baurecht, Gefahrenabwehrrecht, " +
-            "Verkehrsrecht, Sozialrecht, Gesundheitsrecht, Steuer- & Abgabenrecht, " +
-            "Umwelt- & Naturrecht, Datenschutz & IT-Recht, Bildungs- & Jugendrecht, " +
-            "Europarecht, Vergabe & Beschaffung, Migrationsrecht, Notstandsrecht, universal. " +
-            "Common mappings (server resolves automatically): " +
-            "Feuerwehr/Brandschutz/Polizei/Polizeirecht/Katastrophenschutz/Rettungsdienst → Gefahrenabwehrrecht; " +
-            "Beamtenrecht/Tarifrecht/TVöD → Arbeitsrecht; Ortsrecht/GemO/Kreisordnung → Kommunalrecht; " +
-            "Vergaberecht/GWB/VgV → Vergabe & Beschaffung; DSGVO/IT-Recht → Datenschutz & IT-Recht; " +
-            "Asylrecht/Aufenthaltsrecht → Migrationsrecht; Steuerrecht/Gebühren/KAG → Steuer- & Abgabenrecht. " +
-            "Server response shows extensions_resolved/_mapped/_ignored — if your input was mapped or ignored, " +
-            "use the resolved canonical value(s) on the next call. The server NEVER guesses — it maps known " +
-            "synonyms or rejects unknown inputs.",
-          ),
+          .describe(EXTENSIONS_PARAMETER_DESCRIPTION),
       },
       { title: "RAGSource catalog", readOnlyHint: true, destructiveHint: false },
       async ({ geo: geoInput, extensions: extensionsInput }) => {
@@ -705,10 +691,9 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           geo?.level === "gemeinde" && !sourceCatalog.some((s) => s[2] === 5); // rang 5 = Gemeinde
         const notConfiguredHinweis = notConfigured
           ? (notConfiguredMessage ??
-              `Hinweis an den Assistenten: Die Gemeinde "${geo!.display.name}" ist noch nicht als eigenständige Rechtsquelle hinterlegt. ` +
-              `Es werden nur übergeordnete Regelungen angezeigt (z.B. Landes-, Kreis- oder Verbandsrecht — bitte konkret aus dem Catalog benennen). ` +
-              `Weise den Nutzer darauf hin, dass gemeindespezifische Satzungen noch nicht aufgenommen wurden, ` +
-              `und verweise ihn auf die in der System Message verlinkte Projektseite für eine vollständig konfigurierte Instanz.`)
+              `Gemeinde "${geo!.display.name}" ist noch nicht als eigenständige Rechtsquelle hinterlegt. ` +
+              `Es werden nur übergeordnete Regelungen (Land/Kreis/Verband) gezeigt — diese im Catalog konkret benennen. ` +
+              `Nutzer informieren, dass keine gemeindespezifischen Satzungen vorliegen, und auf die System-Message-Projektseite verweisen.`)
           : undefined;
 
         // Extensions-Block für Response: zeigt dem LLM was effektiv galt
@@ -760,19 +745,13 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           .min(1)
           .max(8)
           .describe(
-            "Source IDs from RAGSource_catalog, e.g. ['FwG_BW', 'D_BGB']. Max. 8 per call.",
-          ),
-        level: z
-          .string()
-          .optional()
-          .describe(
-            "TOC level for multi-part works, e.g. 'buch-2' for BGB Book 2. Default: 'gesamt'.",
+            "Source IDs from RAGSource_catalog, e.g. ['BW_FwG', 'D_BGB']. Max. 8 per call.",
           ),
       },
       { title: "RAGSource toc", readOnlyHint: true, destructiveHint: false },
-      async ({ sources: sourceIds, level }) => {
+      async ({ sources: sourceIds }) => {
         const db = this.env.DB;
-        const targetLevel = level ?? "gesamt";
+        const targetLevel = "gesamt";
         const ph = sourceIds.map(() => "?").join(", ");
 
         // Hilfsfunktion: Sources, TOCs und Sections für eine DB laden
@@ -864,7 +843,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             z.object({
               source: z
                 .string()
-                .describe("Source ID from RAGSource_catalog, e.g. 'FwG_BW'"),
+                .describe("Source ID from RAGSource_catalog, e.g. 'BW_FwG'"),
               sections: z
                 .array(z.string())
                 .max(25)
@@ -1048,17 +1027,11 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           .string()
           .max(100)
           .optional()
-          .describe(
-            "Geo filter: ARS code (2=state, 5=district, 9=association, 12=municipality) or place name. " +
-            "Examples: '08' (BW), '09' (BY), '09162' (München, Kreis-Ebene), 'München' (Klarname).",
-          ),
+          .describe(GEO_PARAMETER_DESCRIPTION),
         extensions: z
           .array(z.string())
           .optional()
-          .describe(
-            "Optional topic filters (OR-linked). Default: empty. " +
-            "Same valid values and mappings as RAGSource_catalog extensions.",
-          ),
+          .describe(EXTENSIONS_PARAMETER_DESCRIPTION),
         hints: z
           .array(z.string())
           .optional()
@@ -1267,50 +1240,53 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         : "\n(keine Datenbanken konfiguriert)";
 
       const dbQueryDescription =
-        "Führt strukturierte Abfragen gegen tabellarische Datenbestände aus.\n" +
-        "Jede Datenbank hat eigene Filter-Spalten und Rückgabe-Spalten.\n\n" +
-        "Verfügbare Datenbanken:" + dbsSection + "\n\n" +
-        "Filter-Syntax (Suffix-Konvention):\n" +
-        "  { spalte: 'wert' }               exakt-match\n" +
-        "  { spalte_like: 'teil' }          LIKE '%teil%'\n" +
-        "  { spalte_gte: n, spalte_lte: n } Range\n" +
-        "  { spalte_in: ['a','b'] }         IN (OR auf Werten)\n" +
-        "  { spalte_isnull: true }          IS NULL\n" +
-        "  Mehrere Keys im filter:          AND-verknüpft\n" +
-        "  { any_of: [...] }                OR zwischen Objekten\n\n" +
-        "Ergebnis enthält: db, stand, verbindlichkeit, total, rows (+ ggf. quelle_url_template für Quellenlink).";
+        "Executes structured queries against tabular datasets.\n" +
+        "Each database has its own filter columns and return columns.\n\n" +
+        "Available databases:" + dbsSection + "\n\n" +
+        "Filter syntax (suffix convention):\n" +
+        "  { col: 'val' }                  exact match\n" +
+        "  { col_like: 'part' }            LIKE '%part%'\n" +
+        "  { col_in: ['a','b'] }           IN (OR over values)\n" +
+        "  { col_ne: 'val' }               not equal\n" +
+        "  { col_gt: n, col_lt: n }        strict range\n" +
+        "  { col_gte: n, col_lte: n }      inclusive range\n" +
+        "  { col_isnull: true }            IS NULL\n" +
+        "  { col_notnull: true }           IS NOT NULL\n" +
+        "  multiple keys in filter:        AND-linked\n" +
+        "  { any_of: [...] }               OR between objects\n\n" +
+        "Response includes: db, stand, verbindlichkeit, total, rows (+ optional quelle_url_template for source links).";
 
       this.server.tool(
         "RAGSource_db_query",
         dbQueryDescription,
         {
-          db: z.string().describe("Name der Datenbank, z.B. 'gefahrstoff', 'uebergabe_regeln'."),
+          db: z.string().describe("Database name, e.g. 'gefahrstoff', 'uebergabe_regeln'."),
           filter: z
             .record(z.union([z.string(), z.number(), z.boolean(), z.null(), z.array(z.union([z.string(), z.number()]))]))
             .optional()
             .describe(
-              "Filter-Objekt mit Suffix-Konvention. " +
-              "Spezialschlüssel 'any_of': Array von Filter-Objekten, OR-verknüpft. " +
-              "Beispiel: { un_nr: '1203' } oder { bezeichnung_like: 'benzin' }.",
+              "Filter object using the suffix convention (see tool description). " +
+              "Special key 'any_of': array of filter objects, OR-linked. " +
+              "Examples: { un_nr: '1203' } or { bezeichnung_like: 'benzin' }.",
             ),
           columns: z
             .array(z.string())
             .optional()
-            .describe("Welche Spalten zurückgegeben werden sollen. Default: alle Spalten der DB."),
+            .describe("Which columns to return. Default: all columns of the database."),
           limit: z
             .number()
             .int()
             .min(1)
             .max(50)
             .optional()
-            .describe("Maximale Anzahl Zeilen. Default 5, max 50."),
+            .describe("Maximum number of rows. Default 5, max 50."),
           order_by: z
             .object({
               column: z.string(),
               direction: z.enum(["asc", "desc"]),
             })
             .optional()
-            .describe("Sortierung, z.B. { column: 'bezeichnung_de', direction: 'asc' }."),
+            .describe("Result sorting, e.g. { column: 'bezeichnung_de', direction: 'asc' }."),
         },
         { title: "RAGSource db_query", readOnlyHint: true, destructiveHint: false },
         async ({ db: dbName, filter, columns: reqColumns, limit, order_by }) => {
