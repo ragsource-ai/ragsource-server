@@ -9,6 +9,56 @@ Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [2.8.0] — 2026-05-03
+
+### Hinzugefügt
+- **geo:** Mehrstufiger Klarnamen-Lookup verhindert ARS-Halluzination (`engine/normalize.ts`)
+  - Multi-Token-AND-Match — `"Müllheim Markgräflerland"` löst eindeutig auf
+  - Ebenen-Hint-Präfixe — `"Kreis Konstanz"` / `"Lkr Göppingen"` / `"Land Bayern"` / `"Verband Bad Boll"`
+  - `AmbiguousGeo` mit `typ`-Feld pro Kandidat (gemeinde/verband/kreis/land)
+  - Top-5-Prefix-Vorschläge in `geo_not_found`-Response
+  - Sonderwerte `"00"` (EU+Bund) und `"full"` in Tool-Description dokumentiert
+- **extensions:** Server-seitige Validierung gegen 22-Werte-Taxonomie (`engine/extensions.ts`)
+  - Synonym-Map mit ~80 Einträgen (Feuerwehr→Gefahrenabwehrrecht, DSGVO→Datenschutz & IT-Recht, …)
+  - 5-stufiger Lookup: exakt → case → synonym → prefix → ignored
+  - Strukturiertes Response-Feedback: `extensions_input/_resolved/_mapped/_ignored/_warning`
+  - Variante A: bei nur ungültigen Extensions läuft Aufruf weiter, ohne Filter
+- **mcp:** `ENDPOINT_PROFILES` als Code-Konstante für statisches Branding (Variante C)
+  - 4 Profile: amtsschimmel / brandmeister / all (paragrafenreiter) / default
+  - `system_message` und `contactMail` aus Profile statt KV
+  - `not_configured`-Hinweis nutzt jetzt korrekt endpoint-spezifische Kontaktmail (Bug-Fix: brandmeister zeigte fälschlich `kontakt@amtsschimmel.ai`)
+- **mcp:** Optionaler Wartungsbanner-Slot via KV `system_message` (überschreibt Branding für ALLE Endpoints)
+- **mcp:** Skill-Loading-Rule prominent in Tool-Description und INSTRUCTIONS — „Skills are practice supplements, NEVER substitutes for legal sources"
+- **tests:** 84 Unit-Tests für `engine/normalize.ts` und `engine/extensions.ts`
+  - `extensions.test.ts` — 32 Tests (5 Auflösungs-Stufen + Edge cases)
+  - `normalize.test.ts` — 52 Tests + In-Memory-D1-Mock für `resolveGeo`
+- **ci:** `.nvmrc` für lokale Entwicklung (Node 22)
+
+### Geändert
+- **mcp:** Tool-Descriptions Audit (12 Findings adressiert)
+  - Source-ID-Beispiele korrigiert (`FwG_BW` → `BW_FwG`)
+  - `geo`-Description um Multi-Token, Level-Hints, Sonderwerte erweitert
+  - Zentrale Konstanten `GEO_PARAMETER_DESCRIPTION` und `EXTENSIONS_PARAMETER_DESCRIPTION` (DRY zwischen Catalog + Query)
+  - `db_query`-Description komplett englisch + alle 9 Suffixe dokumentiert
+  - `not_configured`-Hinweistext kompakter (4 Sätze → 3)
+  - `level`-Parameter aus `RAGSource_toc` entfernt (war ungenutzt)
+  - `INSTRUCTIONS`-Konstante: Säule 1 als ALWAYS REQUIRED markiert; Claude-Code-spezifische Blöcke (DEFERRED TOOLS, MULTIPLE SERVERS) entfernt
+- **types:** `Env.CONFIG` von `?: KVNamespace` auf `: KVNamespace` (required) — alle 6 Wrangler-Envs binden es
+- **ci:** Node.js 20 → 22 LTS in `deploy.yml` und `rebuild-db.yml`
+- **mcp:** `INSTRUCTIONS_DEFAULT` umbenannt zu `INSTRUCTIONS` (kein Default mehr ohne KV-Override)
+
+### Entfernt
+- **kv:** `instructions:default`, `instructions:all`, `instructions:amtsschimmel`, `instructions:brandmeister` aus KV gelöscht (Code ist Single Source of Truth)
+- **kv:** `system_message:all`, `system_message:amtsschimmel`, `not_configured_message` aus KV gelöscht (Endpoint-Profile übernehmen)
+- **mcp:** KV-Override-Mechanik für Instructions abgeschafft (saubere Code-only-Architektur)
+- **mcp:** Sonderwert `universal` aus `extensions`-Tool-Description entfernt (rein interner Frontmatter-Tag)
+
+### Behoben
+- **oauth:** 7 pre-existing TS-Errors `'env.CONFIG' is possibly 'undefined'` durch CONFIG-required-Anpassung
+- **mcp:** brandmeister-Endpoint zeigte bei `not_configured` fälschlich `kontakt@amtsschimmel.ai`
+
+---
+
 ## [2.7.0] — 2026-04-22
 
 ### Hinzugefügt
