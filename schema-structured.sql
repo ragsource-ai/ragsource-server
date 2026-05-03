@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS db_gefahrstoff (
   pubchem_cid TEXT,
   pubchem_ghs_signal TEXT,             -- "Warning" / "Danger"
   pubchem_ghs_hazards TEXT,            -- H-Codes: "H225,H302,H315"
+  pubchem_ghs_precautionary TEXT,      -- P-Codes: "P210,P233,P303+P361+P353"
   pubchem_idlh TEXT,                   -- IDLH-Wert (z.B. "200 ppm")
   pubchem_niosh_rel_twa TEXT,          -- NIOSH REL TWA
   pubchem_niosh_rel_stel TEXT,         -- NIOSH REL STEL
