@@ -588,11 +588,17 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
       async ({ geo: geoInput, extensions: extensionsInput }) => {
         const db = this.env.DB;
 
-        // Endpoint-Profile bestimmt system_message (Branding) und Kontaktmail
-        // für not_configured. Statisch im Code, kein KV-Lookup mehr.
+        // Endpoint-Profile liefert das Branding (system_message) und die
+        // Kontaktmail für not_configured — statisch im Code, in git versioniert.
         const currentEndpoint = resolveMandatoryEndpoint();
         const profile = getEndpointProfile(currentEndpoint);
-        const systemMessage = profile.systemMessage;
+
+        // KV `system_message` (ohne Suffix, global): optionaler Wartungs-/Live-Banner.
+        // Überschreibt das Endpoint-Branding solange er gesetzt ist (für alle Endpoints
+        // gleichzeitig). Setzen via `wrangler kv key put system_message "<Text>"`,
+        // Entfernen via `wrangler kv key delete system_message`.
+        const kvBanner = (await this.env.CONFIG?.get("system_message")) ?? null;
+        const systemMessage = kvBanner ?? profile.systemMessage;
 
         // Geo auflösen; URL-?geo= als Request-Default wenn kein expliziter Parameter.
         // _currentGeo wird per fetch() pro Request gesetzt — robuster als sessionGeo-Closure,
