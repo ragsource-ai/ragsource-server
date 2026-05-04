@@ -179,3 +179,18 @@ CREATE TABLE IF NOT EXISTS db_uebergabe_regeln (
   stand TEXT,
   PRIMARY KEY (wgk, stoffklasse)
 );
+
+-- -----------------------------------------------------------------------
+-- db_ghs_codes — offizielle Klartexte für H-/EUH-/P-Sätze
+-- Quelle: CLP-Verordnung 1272/2008 Anhang III + IV (DE konsolidierte Fassung)
+-- Daten extrahiert aus EUR-Lex CELEX 02008R1272-20260501 via Pipeline.
+-- 3-Komponenten-Combos (z.B. P305+P351+P338) sind in CLP nicht definiert
+-- und werden zur Laufzeit aus Einzelteilen konkateniert.
+-- -----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS db_ghs_codes (
+  code         TEXT PRIMARY KEY,
+  kategorie    TEXT NOT NULL,             -- "H" | "EUH" | "P" | "P_combined"
+  klartext_de  TEXT NOT NULL,
+  quelle       TEXT NOT NULL DEFAULT 'CLP-VO 1272/2008 Anhang III/IV (DE konsolidiert)'
+);
+CREATE INDEX IF NOT EXISTS idx_ghs_kategorie ON db_ghs_codes(kategorie);

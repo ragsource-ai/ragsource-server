@@ -1286,7 +1286,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             }
             return (
               `\n**${d.db}** — ${d.beschreibung}` +
-              `\nStand: ${d.stand ?? "unbekannt"} · Verbindlichkeit: ${d.verbindlichkeit ?? "unbekannt"}` +
+              `\nStand: ${d.stand ?? "unbekannt"}` +
               (d.tenant_note ? `\nLizenz: ${d.tenant_note}` : "") +
               `\nFilter-Spalten: ${lookupKeysDisplay}` +
               `\nAlle Spalten: ${colsDisplay}`
@@ -1309,7 +1309,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         "  { col_notnull: true }           IS NOT NULL\n" +
         "  multiple keys in filter:        AND-linked\n" +
         "  { any_of: [...] }               OR between objects\n\n" +
-        "Response includes: db, stand, verbindlichkeit, total, rows (+ optional quelle_url_template for source links).";
+        "Response includes: db, stand, total, rows (+ optional quelle_url_template for source links).";
 
       this.server.tool(
         "RAGSource_db_query",
@@ -1438,7 +1438,6 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
                 text: JSON.stringify({
                   db: dbName,
                   stand: dbMeta.stand,
-                  verbindlichkeit: dbMeta.verbindlichkeit,
                   ...(dbMeta.quelle_url_template && { quelle_url_template: dbMeta.quelle_url_template }),
                   total: rows.length,
                   ...(truncated && { hinweis: `Auf ${effectiveLimit} Zeilen begrenzt. Filter verfeinern für vollständige Ergebnisse.` }),
