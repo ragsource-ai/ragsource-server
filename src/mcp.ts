@@ -265,7 +265,10 @@ const INSTRUCTIONS =
   "(3) Säule 3: future local data.\n" +
   "\n" +
   "Norm hierarchy: higher-ranking law supersedes lower-ranking (e.g. federal > state). " +
-  "On conflicts: cite the higher-ranking norm and name the conflict.";
+  "On conflicts: cite the higher-ranking norm and name the conflict.\n" +
+  "\n" +
+  "Tool loading: If RAGSource_catalog is not yet available (deferred tools, e.g. Claude Web), " +
+  "call ToolSearch(query='catalog legal sources', max_results=10) once to load it before proceeding.";
 
 // -----------------------------------------------------------------------
 // Projekt-Erkennung via Host-Header
