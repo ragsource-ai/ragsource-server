@@ -806,8 +806,8 @@ for (const { file, root } of mdFilesWithRoot) {
     continue;
   }
 
-  // Source-ID aus Dateinamen generieren
-  const sourceId = generateSourceId(file);
+  // Source-ID: explizites id:-Frontmatter-Feld hat Vorrang, sonst Dateiname
+  const sourceId: string = fm.id ? String(fm.id) : generateSourceId(file);
 
   // Kollision prüfen
   if (seenIds.has(sourceId)) {
