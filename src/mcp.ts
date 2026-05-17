@@ -182,6 +182,92 @@ const EBENE_ORDER: Record<string, number> = {
   "tarifrecht": 7,
 };
 
+// --- Prefix/TYP-Legende für Catalog ---
+
+const GEO_PREFIX_MAP: Record<string, string> = {
+  "EU": "EU-Recht",
+  "D_FwDV": "Feuerwehr-Dienstvorschrift",
+  "D": "Bundesrecht",
+  "BW_VWV": "BW Verwaltungsvorschrift",
+  "BW": "Baden-Württemberg",
+  "Lkr_GP": "Lkr Göppingen",
+  "Lkr_KON": "Lkr Konstanz",
+  "Lkr_LB": "Lkr Ludwigsburg",
+  "GVB": "Gemeindeverwaltungsverband",
+  "SKILL": "Praxis-Skill",
+  // LOCODE Gemeinden
+  "KON": "Konstanz",
+  "BBO": "Bad Boll",
+  "ABG": "Aichelberg",
+  "GLS": "Gammelshausen",
+  "HNO": "Hattenhofen",
+  "ZAG": "Zell u.A.",
+  "SWI": "Schwieberdingen",
+  "GON": "Göppingen",
+  "EHB": "Eschenbach",
+  "GLG": "Gerlingen",
+  // Bundesländer
+  "BB": "Brandenburg",
+  "BE": "Berlin",
+  "BY": "Bayern",
+  "HB": "Bremen",
+  "HE": "Hessen",
+  "HH": "Hamburg",
+  "MV": "Mecklenburg-Vorpommern",
+  "NI": "Niedersachsen",
+  "NW": "Nordrhein-Westfalen",
+  "RP": "Rheinland-Pfalz",
+  "SH": "Schleswig-Holstein",
+  "SL": "Saarland",
+  "SN": "Sachsen",
+  "ST": "Sachsen-Anhalt",
+  "TH": "Thüringen",
+};
+
+// Sorted by length descending for longest-prefix-match
+const GEO_PREFIXES_SORTED = Object.keys(GEO_PREFIX_MAP).sort((a, b) => b.length - a.length);
+
+const TYP_MAP: Record<string, string> = {
+  "Stz": "Satzung",
+  "VO": "Verordnung",
+  "RL": "Richtlinie",
+  "BO": "Benutzungsordnung",
+  "GO": "Geschäftsordnung",
+};
+
+function extractIdTokens(id: string): { prefix: string | null; typ: string | null } {
+  let matchedPrefix: string | null = null;
+  let remainder = id;
+  for (const prefix of GEO_PREFIXES_SORTED) {
+    if (id === prefix || id.startsWith(prefix + "_")) {
+      matchedPrefix = prefix;
+      remainder = id.slice(prefix.length + 1);
+      break;
+    }
+  }
+  const firstSegment = remainder.split("_")[0];
+  const matchedTyp = TYP_MAP[firstSegment] ? firstSegment : null;
+  return { prefix: matchedPrefix, typ: matchedTyp };
+}
+
+function buildIdLegend(ids: string[]): { id_prefix?: Record<string, string>; id_typ?: Record<string, string> } {
+  const usedPrefixes = new Set<string>();
+  const usedTyps = new Set<string>();
+  for (const id of ids) {
+    const { prefix, typ } = extractIdTokens(id);
+    if (prefix) usedPrefixes.add(prefix);
+    if (typ) usedTyps.add(typ);
+  }
+  const id_prefix: Record<string, string> = {};
+  for (const p of usedPrefixes) id_prefix[p] = GEO_PREFIX_MAP[p];
+  const id_typ: Record<string, string> = {};
+  for (const t of usedTyps) id_typ[t] = TYP_MAP[t];
+  return {
+    ...(usedPrefixes.size > 0 && { id_prefix }),
+    ...(usedTyps.size > 0 && { id_typ }),
+  };
+}
+
 function sortByEbene<T extends Pick<Source, "ebene" | "titel" | "typ">>(sources: T[]): T[] {
   return [...sources].sort((a, b) => {
     // Skills immer zuerst (vor allen Rechtsquellen)
@@ -277,7 +363,10 @@ const INSTRUCTIONS =
   "(3) Säule 3: future local data.\n" +
   "\n" +
   "Norm hierarchy: higher-ranking law supersedes lower-ranking (e.g. federal > state). " +
-  "On conflicts: cite the higher-ranking norm and name the conflict.";
+  "On conflicts: cite the higher-ranking norm and name the conflict.\n" +
+  "\n" +
+  "Tool loading: If RAGSource_catalog is not yet available (deferred tools, e.g. Claude Web), " +
+  "call ToolSearch(query='catalog legal sources', max_results=10) once to load it before proceeding.";
 
 // -----------------------------------------------------------------------
 // Projekt-Erkennung via Host-Header
@@ -689,11 +778,10 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         const sizeMap: Record<string, string> = { small: "S", medium: "M", large: "L" };
         const toEntry = (s: CatalogRow): CatalogEntry => [
           s.id,
-          s.titel,
           s.rechtsrang,
           sizeMap[s.size_class] ?? "M",
-          s.toc_available === 1,
-          s.beschreibung || null,
+          s.toc_available,
+          s.beschreibung || 0,
         ];
         const skillEntries = sorted.filter((s) => s.typ === "skill");
         const sourceEntries = sorted.filter((s) => s.typ !== "skill");
@@ -709,7 +797,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         // Nicht-konfiguriert-Fall (c):
         // Gemeinde-Ebene aufgelöst, aber keine Gemeinde-Quellen vorhanden
         const notConfigured =
-          geo?.level === "gemeinde" && !sourceCatalog.some((s) => s[2] === 5); // rang 5 = Gemeinde
+          geo?.level === "gemeinde" && !sourceCatalog.some((s) => s[1] === 5); // rang 5 = Gemeinde
         const notConfiguredHinweis = notConfigured
           ? buildNotConfiguredHinweis(profile, geo!.display.name)
           : undefined;
@@ -733,6 +821,8 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           : null;
         if (operatingRules) this._rulesSent = true;
 
+        const idLegend = buildIdLegend(sorted.map((s) => s.id));
+
         const payload = {
           ...(systemMessage && { system_message: systemMessage }),
           ...(operatingRules && { operating_rules: operatingRules }),
@@ -741,9 +831,10 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           ...(extensionsBlock && extensionsBlock),
           total: sorted.length,
           ...(notConfigured && { not_configured: true, hinweis: notConfiguredHinweis }),
-          schema: ["id", "titel", "rang", "size", "toc", "hint"],
+          schema: ["id", "rang", "size", "toc", "hint"],
           rang_legende: { 0: "EU", 1: "Bund", 2: "Land", 3: "Kreis", 4: "Verband", 5: "Gemeinde", 6: "Tarifrecht" },
           size_legende: { S: "get direkt", M: "toc empfohlen", L: "toc erforderlich" },
+          ...idLegend,
           ...(skillCatalog.length > 0 && { skills: skillCatalog }),
           sources: sourceCatalog,
         };

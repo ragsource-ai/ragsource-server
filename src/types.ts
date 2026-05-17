@@ -81,14 +81,13 @@ export interface SourceToc {
 // Rückgabe-Typen der MCP-Tools
 // -----------------------------------------------------------------------
 
-/** Catalog-Eintrag als kompaktes Array: [id, titel, rang, size, toc, hint] */
+/** Catalog-Eintrag als kompaktes Array: [id, rang, size, toc, hint] */
 export type CatalogEntry = [
-  string,              // id
-  string,              // titel
+  string,              // id (semantisch, kein titel nötig)
   number | null,       // rechtsrang: 0=EU … 6=Tarifrecht
   string,              // size: "S" | "M" | "L"
-  boolean,             // toc_available
-  string | null,       // hint (kurzer Routing-Hinweis, oder null)
+  0 | 1,               // toc_available
+  string | 0,          // hint (kurzer Routing-Hinweis) oder 0 wenn keiner
 ];
 
 /** TOC-Ergebnis (für RAGSource_toc) */
