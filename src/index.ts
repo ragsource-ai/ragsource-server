@@ -19,6 +19,7 @@ import {
   handleClientRegistration,
   handleAuthorize,
   handleToken,
+  handleGeoSearch,
   validateBearer,
 } from "./oauth.js";
 
@@ -130,9 +131,12 @@ export default {
     const path = url.pathname;
 
     // ----------------------------------------------------------------
-    // OAuth-Endpunkte (nur aktiv wenn ACCESS_TOKEN gesetzt)
+    // OAuth-Endpunkte (aktiv wenn ACCESS_TOKEN ODER OAUTH_PUBLIC gesetzt)
+    //   ACCESS_TOKEN  → Passwort-Modus (GP1)
+    //   OAUTH_PUBLIC  → passwortloser Geo-Picker-Modus (App-Directory)
     // ----------------------------------------------------------------
-    if (env.ACCESS_TOKEN) {
+    const oauthActive = Boolean(env.ACCESS_TOKEN || env.OAUTH_PUBLIC);
+    if (oauthActive) {
       if (path === "/.well-known/oauth-protected-resource") {
         return handleProtectedResourceMetadata(request);
       }
@@ -150,6 +154,9 @@ export default {
         if (request.method === "OPTIONS") return corsPreflightResponse();
         return handleToken(request, env);
       }
+      if (path === "/oauth/geo-search") {
+        return addCors(await handleGeoSearch(request, env));
+      }
     }
 
     // ----------------------------------------------------------------
@@ -158,11 +165,15 @@ export default {
     if (path === "/mcp" || path.startsWith("/mcp/")) {
       if (request.method === "OPTIONS") return corsPreflightResponse();
 
-      // Auth Guard — statischer Token ODER KV-gespeicherter OAuth-Token
-      if (env.ACCESS_TOKEN) {
-        const auth = request.headers.get("Authorization") ?? "";
-        const ok = await validateBearer(auth, env);
-        if (!ok) {
+      const bearer = request.headers.get("Authorization") ?? "";
+      const token = bearer.startsWith("Bearer ") ? bearer.slice(7) : "";
+
+      // Auth Guard — statischer Token ODER KV-gespeicherter OAuth-Token.
+      // Im Geo-Picker-Modus trägt der Token den gewählten ARS.
+      let tokenGeo: string | null = null;
+      if (oauthActive) {
+        const { valid, geo } = await validateBearer(bearer, env);
+        if (!valid) {
           const resourceMetaUrl = `${url.origin}/.well-known/oauth-protected-resource`;
           return new Response(
             JSON.stringify({ error: "Unauthorized", hint: "OAuth erforderlich." }),
@@ -176,11 +187,15 @@ export default {
             },
           );
         }
+        tokenGeo = geo;
       }
 
-      // Rate-Limiting
+      // Rate-Limiting — pro Token (falls vorhanden), sonst pro IP.
+      // ChatGPT bündelt Requests über wenige OpenAI-IPs; ein reiner IP-Key
+      // würde alle App-Nutzer gegenseitig drosseln.
       const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
-      const { success } = await env.RATE_LIMITER.limit({ key: ip });
+      const rateLimitKey = token ? `t:${token}` : `ip:${ip}`;
+      const { success } = await env.RATE_LIMITER.limit({ key: rateLimitKey });
       if (!success) {
         return new Response(
           JSON.stringify({ error: "Too Many Requests", retry_after: 60 }),
@@ -195,7 +210,17 @@ export default {
         );
       }
 
-      const mcpResponse = await RAGSourceMCPv2.serve("/mcp").fetch(request, env, ctx);
+      // Geo-Injection: an den Token gebundener ARS wird als ?geo=-Default in die
+      // MCP-URL geschrieben. Die DO liest ?geo= unverändert; ein explizites
+      // geo-Tool-Argument überschreibt den Default weiterhin (Multi-ARS).
+      let mcpRequest = request;
+      if (tokenGeo) {
+        const mcpUrl = new URL(request.url);
+        mcpUrl.searchParams.set("geo", tokenGeo);
+        mcpRequest = new Request(mcpUrl, request);
+      }
+
+      const mcpResponse = await RAGSourceMCPv2.serve("/mcp").fetch(mcpRequest, env, ctx);
       return addCors(mcpResponse);
     }
 

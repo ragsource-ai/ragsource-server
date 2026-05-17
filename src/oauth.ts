@@ -1,20 +1,31 @@
 /**
- * Minimaler OAuth 2.0 Authorization Server für GP1-Deployments.
+ * OAuth 2.0 Authorization Server für authentifizierte Deployments.
  *
  * Implementiert den Authorization Code Flow mit PKCE (RFC 7636),
  * Dynamic Client Registration (RFC 7591) und Server Metadata (RFC 8414).
  *
- * Aktiviert sich nur wenn ACCESS_TOKEN gesetzt ist.
- * "Passwort" = der ACCESS_TOKEN-Wert. User gibt ihn auf der /authorize-Seite ein.
+ * Zwei Betriebsmodi (aktiviert sich, sobald ACCESS_TOKEN ODER OAUTH_PUBLIC gesetzt ist):
+ *
+ *  (a) ACCESS_TOKEN gesetzt  → Passwort-Modus (GP1).
+ *      Die /authorize-Seite zeigt ein Login-Formular; "Passwort" = der ACCESS_TOKEN-Wert.
+ *      Ausgestellte Tokens tragen keine Geo-Bindung.
+ *
+ *  (b) OAUTH_PUBLIC = "true" → passwortloser Geo-Picker-Modus (App-Directory).
+ *      Die /authorize-Seite ist ein Gemeinde-Picker mit Autocomplete. Der gewählte
+ *      ARS wird an den ausgestellten Token gebunden und auf jedem MCP-Request als
+ *      Geo-Default verwendet (siehe index.ts).
+ *
  * Ausgestellte Access Tokens werden in KV gespeichert (TTL 1 Jahr).
  *
  * KV-Keys (CONFIG-Namespace):
  *   oauth:client:{clientId}  → OAuthClient (kein TTL)
  *   oauth:code:{code}        → OAuthCode (TTL 600s)
- *   oauth:token:{token}      → "1" (TTL 365 Tage)
+ *   oauth:token:{token}      → {"geo": "<ARS>"|null} (TTL 365 Tage)
  */
 
 import type { Env } from "./types.js";
+import { resolveGeo, suggestGeo, normalizeString, type GeoCandidate } from "./engine/normalize.js";
+import { resolveHostConfig, getEndpointProfile } from "./engine/endpoint-profiles.js";
 
 // -----------------------------------------------------------------------
 // Typen
@@ -31,7 +42,15 @@ interface OAuthCode {
   redirectUri: string;
   codeChallenge?: string;
   codeChallengeMethod?: string;
+  /** An den späteren Token gebundener ARS (nur Geo-Picker-Modus), sonst null. */
+  geo: string | null;
   expiresAt: number;
+}
+
+/** Ergebnis der Token-Prüfung: gültig + ggf. gebundener Geo-ARS. */
+export interface BearerValidation {
+  valid: boolean;
+  geo: string | null;
 }
 
 // -----------------------------------------------------------------------
@@ -67,9 +86,37 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
+function htmlResponse(html: string, status = 200): Response {
+  return new Response(html, {
+    status,
+    headers: { "Content-Type": "text/html; charset=utf-8" },
+  });
+}
+
+/** True, wenn der passwortlose Geo-Picker-Modus aktiv ist. */
+function isPublicMode(env: Env): boolean {
+  return env.OAUTH_PUBLIC === "true";
+}
+
+/** Branding der Geo-Picker-Seite. */
+interface PickerBranding {
+  name: string;
+  subtitle: string;
+  accent: string;
+}
+
+/** Ermittelt das Picker-Branding aus dem Host (über das Endpoint-Profil). */
+function pickerBrandingFor(hostname: string): PickerBranding {
+  const profile = getEndpointProfile(resolveHostConfig(hostname)?.profile);
+  return profile.pickerBranding ?? {
+    name: "RAGSource",
+    subtitle: "Zitiersichere Rechtsrecherche",
+    accent: "#1e3a5f",
+  };
+}
+
 // -----------------------------------------------------------------------
 // Protected Resource Metadata (RFC 9728)
-// Wird von Claude Web zur OAuth-Discovery genutzt.
 // -----------------------------------------------------------------------
 
 export function handleProtectedResourceMetadata(request: Request): Response {
@@ -140,16 +187,60 @@ export async function handleClientRegistration(request: Request, env: Env): Prom
 }
 
 // -----------------------------------------------------------------------
+// Geo-Suche für den Picker-Autocomplete
+// GET /oauth/geo-search?q=...  → { results: [{ ars, name, kreis, level }] }
+// -----------------------------------------------------------------------
+
+export async function handleGeoSearch(request: Request, env: Env): Promise<Response> {
+  const raw = (new URL(request.url).searchParams.get("q") ?? "").trim().toLowerCase().slice(0, 80);
+  if (raw.length < 2) return json({ results: [] });
+  const norm = normalizeString(raw);
+
+  // Mehr-Ebenen-Suche über Gemeinde, Landkreis, Verband UND Land — damit auch
+  // Bundesländer/Kreise/Verbände im Autocomplete erscheinen. Gemeinde/Kreis/Land
+  // per Prefix (straff, kein Noise); Verband per Substring, weil Verbände als
+  // "GVV Raum Bad Boll" geführt werden — "Bad Boll" soll auch den Verband finden.
+  // ?1/?2 = Prefix-Muster, ?3/?4 = Substring-Muster (je Eingabe + umlaut-normalisiert).
+  const sql = `
+    SELECT ars, name, kreis, level FROM (
+      SELECT ars, name, kreis, 'gemeinde' AS level FROM gemeinden
+        WHERE LOWER(name) LIKE ?1 OR LOWER(name) LIKE ?2
+      UNION
+      SELECT kreis_ars AS ars, kreis AS name, NULL AS kreis, 'kreis' AS level FROM gemeinden
+        WHERE LOWER(kreis) LIKE ?1 OR LOWER(kreis) LIKE ?2 GROUP BY kreis_ars
+      UNION
+      SELECT verband_ars AS ars, verband AS name, NULL AS kreis, 'verband' AS level FROM gemeinden
+        WHERE verband_ars IS NOT NULL AND (LOWER(verband) LIKE ?3 OR LOWER(verband) LIKE ?4) GROUP BY verband_ars
+      UNION
+      SELECT land_ars AS ars, land AS name, NULL AS kreis, 'land' AS level FROM gemeinden
+        WHERE LOWER(land) LIKE ?1 OR LOWER(land) LIKE ?2 GROUP BY land_ars
+    )
+    ORDER BY LENGTH(name) LIMIT 10
+  `;
+  const rows = await env.DB
+    .prepare(sql)
+    .bind(`${raw}%`, `${norm}%`, `%${raw}%`, `%${norm}%`)
+    .all<{ ars: string; name: string; kreis: string | null; level: string }>();
+  const results = (rows.results ?? []).map((r) => ({
+    ars: r.ars,
+    name: r.name,
+    kreis: r.kreis,
+    level: r.level,
+  }));
+  return json({ results });
+}
+
+// -----------------------------------------------------------------------
 // Authorization Endpoint
-// GET  /oauth/authorize → Login-Formular anzeigen
-// POST /oauth/authorize → Zugangscode prüfen, Redirect mit Code
+// GET  /oauth/authorize → Picker (public) bzw. Login-Formular (Passwort-Modus)
+// POST /oauth/authorize → Geo auflösen bzw. Passwort prüfen, Redirect mit Code
 // -----------------------------------------------------------------------
 
 export async function handleAuthorize(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
+  const publicMode = isPublicMode(env);
 
   if (request.method === "GET") {
-    // Parameter aus Query holen und ins Formular einbetten
     const clientId = url.searchParams.get("client_id") ?? "";
     const redirectUri = url.searchParams.get("redirect_uri") ?? "";
     const state = url.searchParams.get("state") ?? "";
@@ -167,9 +258,11 @@ export async function handleAuthorize(request: Request, env: Env): Promise<Respo
       return new Response("Ungültige Redirect URI.", { status: 400 });
     }
 
-    return new Response(loginHtml({ clientId, redirectUri, state, codeChallenge, codeChallengeMethod, error }), {
-      headers: { "Content-Type": "text/html; charset=utf-8" },
-    });
+    const formParams = { clientId, redirectUri, state, codeChallenge, codeChallengeMethod };
+    if (publicMode) {
+      return htmlResponse(pickerHtml({ ...formParams, branding: pickerBrandingFor(url.hostname) }));
+    }
+    return htmlResponse(loginHtml({ ...formParams, error }));
   }
 
   if (request.method === "POST") {
@@ -179,20 +272,54 @@ export async function handleAuthorize(request: Request, env: Env): Promise<Respo
     const state = form.get("state") as string;
     const codeChallenge = form.get("code_challenge") as string;
     const codeChallengeMethod = (form.get("code_challenge_method") as string) ?? "S256";
-    const password = form.get("password") as string;
+    const formParams = { clientId, redirectUri, state, codeChallenge, codeChallengeMethod };
 
-    // Zugangscode prüfen
-    if (!env.ACCESS_TOKEN || password !== env.ACCESS_TOKEN) {
-      // Zurück zum Formular mit Fehler
-      const params = new URLSearchParams({
-        client_id: clientId,
-        redirect_uri: redirectUri,
-        state,
-        code_challenge: codeChallenge,
-        code_challenge_method: codeChallengeMethod,
-        error: "1",
-      });
-      return Response.redirect(`${new URL(request.url).origin}/oauth/authorize?${params}`, 302);
+    let geo: string | null = null;
+
+    if (publicMode) {
+      // Geo-Picker-Modus: gewählten ARS bzw. Freitext auflösen.
+      // geo_ars (Hidden-Field, aus Autocomplete/Kandidaten-Button) hat Vorrang
+      // vor geo_input (Freitext).
+      const branding = pickerBrandingFor(url.hostname);
+      const rawGeo = ((form.get("geo_ars") as string) || (form.get("geo_input") as string) || "").trim();
+      if (!rawGeo) {
+        return htmlResponse(pickerHtml({ ...formParams, branding, error: "Bitte wählen Sie Ihre Gemeinde." }));
+      }
+
+      const resolved = await resolveGeo(rawGeo, env.DB);
+      if (!resolved) {
+        const sugg = await suggestGeo(rawGeo, env.DB, 6);
+        return htmlResponse(pickerHtml({
+          ...formParams,
+          branding,
+          error: `„${rawGeo}" wurde nicht gefunden. Bitte erneut versuchen.`,
+          candidates: sugg,
+        }));
+      }
+      if ("ambiguous" in resolved) {
+        return htmlResponse(pickerHtml({
+          ...formParams,
+          branding,
+          error: "Mehrere Treffer — bitte wählen Sie aus:",
+          candidates: resolved.candidates,
+        }));
+      }
+
+      geo = resolved.gemeinde_ars ?? resolved.verband_ars ?? resolved.kreis_ars ?? resolved.land_ars;
+    } else {
+      // Passwort-Modus (GP1): Zugangscode prüfen.
+      const password = form.get("password") as string;
+      if (!env.ACCESS_TOKEN || password !== env.ACCESS_TOKEN) {
+        const params = new URLSearchParams({
+          client_id: clientId,
+          redirect_uri: redirectUri,
+          state,
+          code_challenge: codeChallenge,
+          code_challenge_method: codeChallengeMethod,
+          error: "1",
+        });
+        return Response.redirect(`${url.origin}/oauth/authorize?${params}`, 302);
+      }
     }
 
     // Auth-Code ausstellen (TTL 10 min)
@@ -202,11 +329,11 @@ export async function handleAuthorize(request: Request, env: Env): Promise<Respo
       redirectUri,
       codeChallenge: codeChallenge || undefined,
       codeChallengeMethod: codeChallengeMethod || undefined,
+      geo,
       expiresAt: Date.now() + 600_000,
     };
     await env.CONFIG.put(`oauth:code:${code}`, JSON.stringify(oauthCode), { expirationTtl: 600 });
 
-    // Redirect zum Client mit Code
     const redirect = new URL(redirectUri);
     redirect.searchParams.set("code", code);
     if (state) redirect.searchParams.set("state", state);
@@ -274,10 +401,14 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     }
   }
 
-  // Access Token ausstellen (TTL 1 Jahr)
+  // Access Token ausstellen (TTL 1 Jahr) — Geo-Bindung im Wert hinterlegt
   const accessToken = randomHex(32);
   const ttl = 365 * 24 * 3600;
-  await env.CONFIG.put(`oauth:token:${accessToken}`, "1", { expirationTtl: ttl });
+  await env.CONFIG.put(
+    `oauth:token:${accessToken}`,
+    JSON.stringify({ geo: oauthCode.geo ?? null }),
+    { expirationTtl: ttl },
+  );
 
   return json({
     access_token: accessToken,
@@ -288,23 +419,193 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
 // -----------------------------------------------------------------------
 // Token validieren (in index.ts verwendet)
-// Akzeptiert: statischen ACCESS_TOKEN ODER KV-gespeicherten OAuth-Token
+// Akzeptiert: statischen ACCESS_TOKEN ODER KV-gespeicherten OAuth-Token.
+// Liefert die an den Token gebundene Geo (ARS) zurück, falls vorhanden.
 // -----------------------------------------------------------------------
 
-export async function validateBearer(authHeader: string, env: Env): Promise<boolean> {
-  if (!authHeader.startsWith("Bearer ")) return false;
+export async function validateBearer(authHeader: string, env: Env): Promise<BearerValidation> {
+  if (!authHeader.startsWith("Bearer ")) return { valid: false, geo: null };
   const token = authHeader.slice(7);
 
-  // Statischer Token (Fallback / direkte API-Nutzung)
-  if (token === env.ACCESS_TOKEN) return true;
+  // Statischer Token (Fallback / direkte API-Nutzung) — keine Geo-Bindung
+  if (env.ACCESS_TOKEN && token === env.ACCESS_TOKEN) {
+    return { valid: true, geo: null };
+  }
 
   // OAuth-Token aus KV
   const val = await env.CONFIG.get(`oauth:token:${token}`);
-  return val === "1";
+  if (val === null) return { valid: false, geo: null };
+  if (val === "1") return { valid: true, geo: null }; // Legacy-Format (vor Geo-Bindung)
+  try {
+    const data = JSON.parse(val) as { geo?: string | null };
+    return { valid: true, geo: data.geo ?? null };
+  } catch {
+    return { valid: true, geo: null };
+  }
 }
 
 // -----------------------------------------------------------------------
-// Login-HTML
+// Geo-Picker-HTML (passwortloser Modus — App-Directory)
+// -----------------------------------------------------------------------
+
+const GEO_LEVEL_LABEL: Record<string, string> = {
+  gemeinde: "Gemeinde",
+  verband: "Verband",
+  kreis: "Landkreis",
+  land: "Land",
+};
+
+function pickerHtml(params: {
+  clientId: string;
+  redirectUri: string;
+  state: string;
+  codeChallenge: string;
+  codeChallengeMethod: string;
+  branding: PickerBranding;
+  error?: string;
+  candidates?: GeoCandidate[];
+}): string {
+  const { clientId, redirectUri, state, codeChallenge, codeChallengeMethod, branding, error, candidates } = params;
+
+  const candidatesHtml = (candidates && candidates.length > 0)
+    ? `<div class="candidates">${candidates
+        .map((c) => {
+          const label = `${c.name}${c.kreis && c.kreis !== c.name ? " · " + c.kreis : ""}`;
+          const badge = GEO_LEVEL_LABEL[c.typ] ?? c.typ;
+          return `<button type="button" class="cand" onclick="pick('${esc(c.ars)}', '${esc(c.name).replace(/'/g, "\\'")}')">`
+            + `<span>${esc(label)}</span><em>${esc(badge)}</em></button>`;
+        })
+        .join("")}</div>`
+    : "";
+
+  return `<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${esc(branding.name)} – Gemeinde wählen</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #eef1f5;
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh; padding: 1rem;
+    }
+    .card {
+      background: #fff; border-radius: 14px;
+      box-shadow: 0 2px 20px rgba(0,0,0,.12);
+      padding: 2rem; width: 100%; max-width: 420px;
+    }
+    .logo { font-size: 1.4rem; font-weight: 700; color: ${esc(branding.accent)}; }
+    .subtitle { font-size: .875rem; color: #64748b; margin: .15rem 0 1.4rem; }
+    label { display: block; font-size: .875rem; font-weight: 600; color: #334155; margin-bottom: .4rem; }
+    .hint { font-size: .8rem; color: #64748b; margin-bottom: 1rem; }
+    .field { position: relative; }
+    input[type="text"] {
+      width: 100%; padding: .65rem .8rem;
+      border: 1px solid #cbd5e1; border-radius: 9px;
+      font-size: 1rem; outline: none; transition: border-color .15s;
+    }
+    input[type="text"]:focus { border-color: ${esc(branding.accent)}; }
+    .suggestions {
+      position: absolute; left: 0; right: 0; top: calc(100% + 4px);
+      background: #fff; border: 1px solid #cbd5e1; border-radius: 9px;
+      box-shadow: 0 6px 18px rgba(0,0,0,.12); overflow: hidden; z-index: 10;
+    }
+    .suggestions:empty { display: none; }
+    .sug { padding: .55rem .8rem; font-size: .95rem; cursor: pointer; }
+    .sug:hover { background: #eef1f5; }
+    .error { font-size: .85rem; color: #b91c1c; margin: .8rem 0 .2rem; }
+    .candidates { display: flex; flex-direction: column; gap: .4rem; margin-top: .7rem; }
+    .cand {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: .55rem .8rem; background: #f1f5f9; border: 1px solid #e2e8f0;
+      border-radius: 9px; font-size: .95rem; cursor: pointer; text-align: left;
+    }
+    .cand:hover { background: #e2e8f0; }
+    .cand em { font-style: normal; font-size: .75rem; color: #64748b; }
+    button.submit {
+      margin-top: 1.3rem; width: 100%; padding: .7rem;
+      background: ${esc(branding.accent)}; color: #fff; border: none; border-radius: 9px;
+      font-size: 1rem; font-weight: 600; cursor: pointer; transition: filter .15s;
+    }
+    button.submit:hover { filter: brightness(0.92); }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">${esc(branding.name)}</div>
+    <div class="subtitle">${esc(branding.subtitle)}</div>
+
+    <form method="POST" action="/oauth/authorize" id="f" autocomplete="off">
+      <input type="hidden" name="client_id" value="${esc(clientId)}">
+      <input type="hidden" name="redirect_uri" value="${esc(redirectUri)}">
+      <input type="hidden" name="state" value="${esc(state)}">
+      <input type="hidden" name="code_challenge" value="${esc(codeChallenge)}">
+      <input type="hidden" name="code_challenge_method" value="${esc(codeChallengeMethod)}">
+      <input type="hidden" name="geo_ars" id="geo_ars" value="">
+
+      <label for="geo_input">Ihre Gemeinde</label>
+      <div class="hint">Geben Sie Ihre Gemeinde ein. Auch ein Landkreis, Verband oder Bundesland ist möglich.</div>
+      <div class="field">
+        <input type="text" name="geo_input" id="geo_input" placeholder="z. B. Bad Boll" autofocus autocomplete="off">
+        <div class="suggestions" id="suggestions"></div>
+      </div>
+      ${error ? `<p class="error">${esc(error)}</p>` : ""}
+      ${candidatesHtml}
+
+      <button type="submit" class="submit">Verbinden</button>
+    </form>
+  </div>
+
+  <script>
+    var inp = document.getElementById('geo_input');
+    var ars = document.getElementById('geo_ars');
+    var box = document.getElementById('suggestions');
+    var timer;
+    inp.addEventListener('input', function () {
+      ars.value = '';
+      clearTimeout(timer);
+      var q = inp.value.trim();
+      if (q.length < 2) { box.innerHTML = ''; return; }
+      timer = setTimeout(function () { search(q); }, 180);
+    });
+    function search(q) {
+      fetch('/oauth/geo-search?q=' + encodeURIComponent(q))
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          box.innerHTML = '';
+          (d.results || []).forEach(function (it) {
+            var el = document.createElement('div');
+            el.className = 'sug';
+            var lvl = { verband: 'Verband', kreis: 'Landkreis', land: 'Land' };
+            var sub = it.level === 'gemeinde'
+              ? (it.kreis && it.kreis !== it.name ? ' · ' + it.kreis : '')
+              : ' · ' + (lvl[it.level] || it.level);
+            el.textContent = it.name + sub;
+            el.addEventListener('click', function () {
+              inp.value = it.name; ars.value = it.ars; box.innerHTML = '';
+            });
+            box.appendChild(el);
+          });
+        })
+        .catch(function () {});
+    }
+    function pick(a, n) {
+      ars.value = a; inp.value = n;
+      document.getElementById('f').submit();
+    }
+    document.addEventListener('click', function (e) {
+      if (e.target !== inp) box.innerHTML = '';
+    });
+  </script>
+</body>
+</html>`;
+}
+
+// -----------------------------------------------------------------------
+// Login-HTML (Passwort-Modus — GP1)
 // -----------------------------------------------------------------------
 
 function loginHtml(params: {
@@ -414,7 +715,7 @@ function loginHtml(params: {
 </html>`;
 }
 
-/** Minimales HTML-Escaping für Formular-Attribute */
+/** Minimales HTML-Escaping für Formular-Attribute und Texte */
 function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }

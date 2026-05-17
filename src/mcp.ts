@@ -23,6 +23,7 @@ import type {
   QueryHit,
 } from "./types.js";
 import { resolveGeo, suggestGeo, type ResolvedGeo, type AmbiguousGeo, type GeoCandidate } from "./engine/normalize.js";
+import { getEndpointProfile, buildNotConfiguredHinweis, resolveHostConfig, type HostConfig } from "./engine/endpoint-profiles.js";
 import { resolveExtensions, buildExtensionsWarning, EXTENSIONS_PARAMETER_DESCRIPTION, type ExtensionResolution } from "./engine/extensions.js";
 
 // -----------------------------------------------------------------------
@@ -312,7 +313,7 @@ function buildFtsQuery(input: string): string | null {
 
 // -----------------------------------------------------------------------
 // MCP Instructions (kurze projektspezifische Beschreibung für MCP-Initialize)
-// Vollständige Masterprompts → src/prompts/*.md (Claude.ai Projekt-System-Prompt)
+// Projekt-Anweisungen für Claude-Projekte → docs/projekt-prompts/*.md
 // -----------------------------------------------------------------------
 
 /**
@@ -321,6 +322,13 @@ function buildFtsQuery(input: string): string | null {
  * Sonderwerte und das Verhalten bei Mehrdeutigkeit / Unbekanntem ab.
  */
 const GEO_PARAMETER_DESCRIPTION =
+  "IMPORTANT — a geo default is preconfigured for the connection (reported in the response's " +
+  "'geo' field). Omit geo on the first call UNLESS the user names a concrete place in the question. " +
+  "Pass geo when (a) a response returns 'geo_missing', or (b) the user explicitly names a place — " +
+  "a municipality, district or region — then pass that place, also to narrow down to a municipality " +
+  "within the preconfigured region. NEVER derive geo from the legal topic (e.g. do not pass a " +
+  "Bundesland code just because the question concerns state law). Trigger = a place named in the " +
+  "question, not the subject matter. " +
   "Geographic scope. Accepts ARS code or plain name. " +
   "ARS lengths: 2-digit (state), 5-digit (district), 9-digit (association), 12-digit (municipality). " +
   "Examples: '08' (BW), '083155012074', 'Müllheim Markgräflerland', 'Lkr Göppingen', 'Bayern', 'Breisgau-Hochschwarzwald'. " +
@@ -333,7 +341,11 @@ const GEO_PARAMETER_DESCRIPTION =
 
 /** Static MCP-server instructions (Single Source of Truth — same for all endpoints). */
 const INSTRUCTIONS =
-  "RAGSource — Agentic RAG Framework.\n" +
+  "RAGSource — Agentic RAG Framework for German law (EU, federal, state, district, municipal).\n" +
+  "\n" +
+  "Use this server for EVERY question touching German law or public administration. " +
+  "Call RAGSource_catalog FIRST — never answer a legal question, and never cite a § or " +
+  "article, from training memory.\n" +
   "\n" +
   "Workflow: RAGSource_catalog → RAGSource_toc (M/L) → RAGSource_get.\n" +
   "RAGSource_query as alternative when: (a) catalog returns no matching source, " +
@@ -358,91 +370,21 @@ const INSTRUCTIONS =
 
 // -----------------------------------------------------------------------
 // Projekt-Erkennung via Host-Header
+//
+// Host → {tenancy, profile} sowie Endpoint-Profile leben als pures Datenmodul
+// in ./engine/endpoint-profiles.ts (oben importiert). Hier nur die Auflösung
+// gegen den aktuellen Request-Host.
 // -----------------------------------------------------------------------
 
-/**
- * Mappt Hostnamen auf Endpoint-Slugs (Tenancy).
- * "all" = kein Endpoint-Filter (alles durch, z.B. für paragrafenreiter.ai).
- * Kein Eintrag = Direktaufruf, ebenfalls kein Filter.
- */
-const ENDPOINT_BY_HOST: Record<string, string> = {
-  "mcp.amtsschimmel.ai": "amtsschimmel",
-  "mcp-lean.amtsschimmel.ai": "amtsschimmel",
-  "mcp.paragrafenreiter.ai": "all",
-  "mcp.brandmeister.ai": "brandmeister",
-  "mcp-gp1.brandmeister.ai": "brandmeister",
-  "mcp-ct1.ragsource.ai": "all",
-};
-
-/** Gibt den Endpoint-Slug des aktuellen Hosts zurück. */
-function resolveMandatoryEndpoint(): string | undefined {
+/** Host-Konfiguration (Tenancy + Profil) des aktuellen Requests. */
+function currentHostConfig(): HostConfig | undefined {
   try {
     const { request } = getCurrentAgent();
     const hostname = new URL(request?.url ?? "").hostname;
-    return ENDPOINT_BY_HOST[hostname] ?? undefined;
+    return resolveHostConfig(hostname);
   } catch {
     return undefined;
   }
-}
-
-// -----------------------------------------------------------------------
-// Endpoint-Profile (statisches Branding pro Tenant — Single Source of Truth)
-//
-// Statisches Inhalts-Branding lebt im Code (versioniert, in git, Code-Review).
-// Dynamische Inhalte (Wartungs-Banner, etc.) gibt es im aktuellen Setup nicht;
-// für Live-Pflege ohne Redeploy müsste eine bewusste Override-Mechanik wieder
-// eingeführt werden — bis dahin: jede inhaltliche Änderung läuft über git/Deploy.
-// -----------------------------------------------------------------------
-
-interface EndpointProfile {
-  /** Branding-Text mit Markdown — wird als system_message im Catalog-Response geliefert */
-  systemMessage: string;
-  /** Kontakt-Adresse für not_configured-Hinweise und sonstige Verweise */
-  contactMail: string;
-}
-
-const RAGSOURCE_BRANDING =
-  "**Powered by RAGSource.ai** — Mehr Infos [hier](https://www.ragsource.ai)";
-
-const ENDPOINT_PROFILES: Record<string, EndpointProfile> = {
-  amtsschimmel: {
-    systemMessage:
-      "**amtsschimmel.ai — die kommunale Wissensbasis.** Mehr Infos: [www.amtsschimmel.ai](https://www.amtsschimmel.ai)",
-    contactMail: "kontakt@amtsschimmel.ai",
-  },
-  brandmeister: {
-    // Brandmeister nutzt bewusst das RAGSource-Branding (analog zum bisherigen
-    // Live-Verhalten — kein eigener system_message:brandmeister-KV-Eintrag existierte).
-    systemMessage: RAGSOURCE_BRANDING,
-    contactMail: "kontakt@brandmeister.ai",
-  },
-  all: {
-    // "all" = paragrafenreiter (kein Tenancy-Filter).
-    systemMessage:
-      "**Powered by paragrafenreiter.ai** — Mehr Infos [hier](https://www.paragrafenreiter.ai)",
-    contactMail: "kontakt@paragrafenreiter.ai",
-  },
-  default: {
-    systemMessage: RAGSOURCE_BRANDING,
-    contactMail: "info@ragsource.ai",
-  },
-};
-
-/** Liefert das Profil für einen Endpoint (mit Default-Fallback). */
-function getEndpointProfile(endpoint: string | undefined): EndpointProfile {
-  return ENDPOINT_PROFILES[endpoint ?? "default"] ?? ENDPOINT_PROFILES.default;
-}
-
-/** Baut den `not_configured`-Hinweistext aus dem Endpoint-Profil. */
-function buildNotConfiguredHinweis(profile: EndpointProfile, gemeindeName: string): string {
-  return (
-    `Hinweis an den Assistenten: Die Gemeinde "${gemeindeName}" ist noch nicht als eigenständige ` +
-    `Rechtsquelle hinterlegt. Es werden nur übergeordnete Regelungen (Land/Kreis/Verband) gezeigt — ` +
-    `diese im Catalog konkret benennen. ` +
-    `Teile dem Nutzer mit: 'Ihre Gemeinde wurde noch nicht aufgenommen. ` +
-    `Es werden Ihnen übergeordnete Regelungen angezeigt. Um Ihre Gemeinde aufzunehmen, ` +
-    `schreiben Sie bitte an ${profile.contactMail}'.`
-  );
 }
 
 // -----------------------------------------------------------------------
@@ -614,6 +556,8 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
   private _currentGeo: string = "";
   /** Extension-Filter aus der MCP-URL (?extensions=Feuerwehr,Arbeitsrecht) */
   private _currentExtensions: string[] = [];
+  /** True, sobald der Betriebskontrakt (operating_rules) einmal ausgeliefert wurde. */
+  private _rulesSent: boolean = false;
 
   /**
    * Placeholder-Server (nötig weil McpAgent die Property beim Start liest).
@@ -658,17 +602,23 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     this.server.tool(
       "RAGSource_catalog",
-      "STEP 1 — Required first call for every request. " +
+      "STEP 1 — MANDATORY FIRST STEP. You MUST call this before answering any legal question. " +
+      "Never cite a law, §, or article that was not discovered and loaded through this workflow. " +
       "Returns available legal sources (EU to municipal level) and optional skills (typ:skill). " +
       "\n\n" +
-      "CRITICAL — Skill-Loading-Rule: Skills are practice supplements, NEVER substitutes for legal sources. " +
-      "Do NOT answer from skills alone. For every skill you load, ALSO load the underlying Säule-1 " +
-      "sources (FwDVen, Landesgesetze, Verordnungen) it references. The skill hint typically lists " +
-      "'Quellen: …' — these are the mandatory companion sources to load. If unsure which legal " +
-      "sources accompany a skill, load the skill first to read its 'Quellen'-section, then load those. " +
+      "Routing by size — ALWAYS follow: S → call RAGSource_get directly; M/L → call RAGSource_toc first, " +
+      "then RAGSource_get. Never call RAGSource_get on an M/L source without RAGSource_toc first. " +
       "\n\n" +
-      "Routing by size: S → RAGSource_get directly; M/L → RAGSource_toc first, then RAGSource_get. " +
-      "system_message in response: prepend verbatim as italicized system notice to the user.",
+      "CRITICAL — Skill-Loading-Rule: skills (typ:skill) complement legal sources — they never " +
+      "replace them. Do NOT answer from skills alone. Skills come in two kinds: practice supplements " +
+      "(decision aids, workflows) and ready-to-use templates (e.g. Sitzungsvorlagen, Musterbeschlüsse). " +
+      "Load every thematically relevant skill — when in doubt, load it rather than skip it. For every " +
+      "skill you load, ALSO load the underlying Säule-1 sources it references; the skill hint typically " +
+      "lists 'Quellen: …' — these are mandatory companion sources. If unsure which sources accompany a " +
+      "skill, load the skill first to read its 'Quellen'-section, then load those. " +
+      "\n\n" +
+      "Response fields: 'operating_rules' (when present) are BINDING — follow them for the whole conversation. " +
+      "'system_message' — prepend verbatim as an italicized system notice to the user.",
       {
         geo: z
           .string()
@@ -686,8 +636,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
 
         // Endpoint-Profile liefert das Branding (system_message) und die
         // Kontaktmail für not_configured — statisch im Code, in git versioniert.
-        const currentEndpoint = resolveMandatoryEndpoint();
-        const profile = getEndpointProfile(currentEndpoint);
+        const profile = getEndpointProfile(currentHostConfig()?.profile);
 
         // KV `system_message` (ohne Suffix, global): optionaler Wartungs-/Live-Banner.
         // Überschreibt das Endpoint-Branding solange er gesetzt ist (für alle Endpoints
@@ -700,6 +649,20 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         // _currentGeo wird per fetch() pro Request gesetzt — robuster als sessionGeo-Closure,
         // die beim DO-Reuse stale sein kann.
         const effectiveGeo = geoInput ?? (this._currentGeo || null);
+
+        // Runtime-Nudge: Das Modell hat explizit ein geo übergeben, obwohl für die
+        // Verbindung bereits ein Default voreingestellt ist (Token/URL). Häufiger
+        // Fehler: geo aus dem Kontext abgeleitet (z.B. "08" wegen Landesrecht) und
+        // damit die Heimatgemeinde überschrieben. Hinweis in die Antwort legen.
+        const geoOverrideNote =
+          (geoInput && this._currentGeo && geoInput !== this._currentGeo)
+            ? `Für diese Verbindung ist bereits eine Region voreingestellt; mit geo='${geoInput}' ` +
+              `hast du eine abweichende Region gewählt. Prüfe: ` +
+              `(a) Hat der Nutzer diese Region ausdrücklich genannt (z.B. Vergleich mit einer anderen ` +
+              `Gemeinde, "wie in X")? Dann ist die geo-Übergabe korrekt — diesen Hinweis ignorieren. ` +
+              `(b) Falls nicht (geo nur aus dem Kontext/Rechtsgebiet abgeleitet): RAGSource_catalog ` +
+              `ohne geo-Parameter erneut aufrufen.`
+            : null;
 
         // Fall a: kein geo → früher Abbruch mit Anweisungen
         if (!effectiveGeo) {
@@ -737,7 +700,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         }
 
         const geoFilter = geoSpecialFilter ?? buildGeoFilter(geo);
-        const endpointFilter = buildEndpointFilter(resolveMandatoryEndpoint());
+        const endpointFilter = buildEndpointFilter(currentHostConfig()?.tenancy);
         // Extension-Auflösung: rohe LLM-Eingabe → kanonische Taxonomie-Werte.
         // Unbekanntes (z.B. "Feuerwehr", "Aufwandsentschädigung") wird gemappt
         // (per Synonym/Prefix) oder ignoriert — niemals 1:1 in die SQL übernommen.
@@ -851,27 +814,33 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             }
           : null;
 
+        // Betriebskontrakt: nur bei der ersten Catalog-Antwort pro DO-Session
+        // mitliefern — danach weglassen (kein Kontext-Noise auf Folgeaufrufen).
+        const operatingRules = (profile.operatingRules && !this._rulesSent)
+          ? profile.operatingRules
+          : null;
+        if (operatingRules) this._rulesSent = true;
+
         const idLegend = buildIdLegend(sorted.map((s) => s.id));
 
+        const payload = {
+          ...(systemMessage && { system_message: systemMessage }),
+          ...(operatingRules && { operating_rules: operatingRules }),
+          ...(geoOverrideNote && { geo_override_note: geoOverrideNote }),
+          geo: geoInfo,
+          ...(extensionsBlock && extensionsBlock),
+          total: sorted.length,
+          ...(notConfigured && { not_configured: true, hinweis: notConfiguredHinweis }),
+          schema: ["id", "rang", "size", "toc", "hint"],
+          rang_legende: { 0: "EU", 1: "Bund", 2: "Land", 3: "Kreis", 4: "Verband", 5: "Gemeinde", 6: "Tarifrecht" },
+          size_legende: { S: "get direkt", M: "toc empfohlen", L: "toc erforderlich" },
+          ...idLegend,
+          ...(skillCatalog.length > 0 && { skills: skillCatalog }),
+          sources: sourceCatalog,
+        };
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                ...(systemMessage && { system_message: systemMessage }),
-                geo: geoInfo,
-                ...(extensionsBlock && extensionsBlock),
-                total: sorted.length,
-                ...(notConfigured && { not_configured: true, hinweis: notConfiguredHinweis }),
-                schema: ["id", "rang", "size", "toc", "hint"],
-                rang_legende: { 0: "EU", 1: "Bund", 2: "Land", 3: "Kreis", 4: "Verband", 5: "Gemeinde", 6: "Tarifrecht" },
-                size_legende: { S: "get direkt", M: "toc empfohlen", L: "toc erforderlich" },
-                ...idLegend,
-                ...(skillCatalog.length > 0 && { skills: skillCatalog }),
-                sources: sourceCatalog,
-              }),
-            },
-          ],
+          content: [{ type: "text" as const, text: JSON.stringify(payload) }],
+          structuredContent: payload,
         };
       },
     );
@@ -881,10 +850,11 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     this.server.tool(
       "RAGSource_toc",
-      "STEP 2 — Table of contents for medium/large sources. " +
+      "STEP 2 — MANDATORY for medium/large (M/L) sources before RAGSource_get. " +
+      "Never call RAGSource_get on an M/L source without first obtaining its section list here. " +
       "Returns all §§/articles with short titles, e.g. '§ 6 Aufgaben (Pflichtaufgaben, Mindeststärke)'. " +
-      "Batch: up to 8 sources per call. Pass sections values verbatim to RAGSource_get. " +
-      "Fallback: if no TOC file exists, small/medium sources return all §§ directly in 'sections' — skip RAGSource_get for those.",
+      "Batch up to 8 sources per call. Pass section references verbatim to RAGSource_get. " +
+      "If no TOC file exists, small/medium sources return all §§ directly in 'sections' — use those, skip RAGSource_get.",
       {
         sources: z
           .array(z.string())
@@ -962,13 +932,10 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           };
         });
 
+        const payload = { tocs: results };
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({ tocs: results }, null, 2),
-            },
-          ],
+          content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+          structuredContent: payload,
         };
       },
     );
@@ -978,11 +945,12 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     this.server.tool(
       "RAGSource_get",
-      "STEP 3 — Loads original text of §§ from one or more legal sources. " +
+      "STEP 3 — Loads the verbatim original text of §§ from one or more legal sources. " +
+      "You MUST load a § here before quoting it or relying on it — never cite from memory. " +
+      "Use section references exactly as returned by RAGSource_toc, e.g. '§ 2', 'Artikel 6'. " +
       "Batch multiple sources in one call for efficiency. " +
-      "Use sections values exactly as returned by RAGSource_toc, e.g. '§ 2', 'Artikel 6'. " +
       "Limits: 8 sources / 25 §§ per source / 50 §§ total. " +
-      "Response includes 'quelle_url' for source citations — use as Markdown link in citations.",
+      "Response includes 'quelle_url' — use it as a Markdown link in every citation.",
       {
         sources: z
           .array(
@@ -1134,23 +1102,16 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           });
         }
 
+        const payload = {
+          results,
+          total_sections: totalSectionsLoaded,
+          ...(truncated && {
+            hinweis: "Limit von 50 §§ pro Aufruf erreicht — nicht alle angeforderten §§ wurden geladen. Bitte Aufruf aufteilen.",
+          }),
+        };
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  results,
-                  total_sections: totalSectionsLoaded,
-                  ...(truncated && {
-                    hinweis: "Limit von 50 §§ pro Aufruf erreicht — nicht alle angeforderten §§ wurden geladen. Bitte Aufruf aufteilen.",
-                  }),
-                },
-                null,
-                2,
-              ),
-            },
-          ],
+          content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+          structuredContent: payload,
         };
       },
     );
@@ -1160,11 +1121,11 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     if (!this.env.DISABLE_QUERY) this.server.tool(
       "RAGSource_query",
-      "FALLBACK / CROSS-SEARCH — two use cases: " +
-      "(1) RAGSource_catalog returns no matching source; " +
-      "(2) topic unclear or cross-source search needed (e.g. 'Which §§ mention Spielhallen?'). " +
-      "Do not use if source is already known from catalog — prefer toc + get. " +
-      "Full-text search, max. 20 results with source_id and section references for RAGSource_get.",
+      "FALLBACK / CROSS-SEARCH — use ONLY when: " +
+      "(1) RAGSource_catalog returns no matching source, or " +
+      "(2) the topic is unclear or a cross-source search is needed (e.g. 'Which §§ mention Spielhallen?'). " +
+      "Do NOT use as a substitute for the catalog → toc → get workflow when the source is already known. " +
+      "Full-text search, max. 20 results with source_id and section references — load the actual text via RAGSource_get.",
       {
         query: z
           .string()
@@ -1198,7 +1159,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         // Bei ambiguem Geo im query-Tool: kein Geo-Filter (FTS sucht im Gesamtbestand)
         const geo = (geoResult && "ambiguous" in geoResult ? null : geoResult) as ResolvedGeo | null;
         const geoFilter = buildGeoFilter(geo);
-        const endpointFilter = buildEndpointFilter(resolveMandatoryEndpoint());
+        const endpointFilter = buildEndpointFilter(currentHostConfig()?.tenancy);
         // Extension-Auflösung: gleiche Validierung wie in RAGSource_catalog
         const rawExtensions = extensionsInput?.length ? extensionsInput : this._currentExtensions;
         const extResolution = resolveExtensions(rawExtensions);
@@ -1303,23 +1264,16 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             }
           : null;
 
+        const payload = {
+          query,
+          geo: geoInfo,
+          ...(extensionsBlock && extensionsBlock),
+          treffer: hits.length,
+          results: hits,
+        };
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  query,
-                  geo: geoInfo,
-                  ...(extensionsBlock && extensionsBlock),
-                  treffer: hits.length,
-                  results: hits,
-                },
-                null,
-                2,
-              ),
-            },
-          ],
+          content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+          structuredContent: payload,
         };
       },
     );
@@ -1329,7 +1283,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     if (this.env.DB_STRUCTURED) {
       const structDb = this.env.DB_STRUCTURED;
-      const currentEndpoint = ENDPOINT_BY_HOST[this._currentHost] ?? undefined;
+      const currentEndpoint = resolveHostConfig(this._currentHost)?.tenancy;
 
       // Datenbanken laden (Endpoint-Filter: NULL = universell, sonst nur passende)
       type DbMetaRow = {

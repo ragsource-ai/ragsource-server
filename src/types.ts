@@ -22,6 +22,12 @@ export interface Env {
   DISABLE_QUERY?: string;
   /** Bearer Token für GP1-Auth. Gesetzt → Auth Guard aktiv. Als Wrangler Secret hinterlegen. */
   ACCESS_TOKEN?: string;
+  /**
+   * Wenn "true": OAuth 2.0 aktiv im passwortlosen Konfig-Modus — die Authorize-Seite
+   * ist ein Gemeinde-Picker statt eines Logins. Der gewählte ARS wird an den Token
+   * gebunden. Für die öffentlichen App-Directory-Deployments (app.amtsschimmel.ai).
+   */
+  OAUTH_PUBLIC?: string;
 }
 
 // -----------------------------------------------------------------------

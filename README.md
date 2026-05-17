@@ -37,14 +37,14 @@ Inhalt fließt über einen `repository_dispatch`-Trigger automatisch in die Date
 ## Architektur
 
 ```
-LLM (Claude Web / Desktop / Code)
+LLM-Clients (Claude Web / Desktop / Code · ChatGPT App)
     │
     └── MCP-Protokoll → POST /mcp
                              │
                     Cloudflare Worker (index.ts)
-                    ├── OAuth-Endpunkte (optional, bei gesetztem ACCESS_TOKEN)
-                    ├── Auth Guard (Bearer / OAuth-Token)
-                    ├── Rate Limiter (60 req/min pro IP)
+                    ├── OAuth-Endpunkte (optional, bei ACCESS_TOKEN oder OAUTH_PUBLIC)
+                    ├── Auth Guard (Bearer / OAuth-Token, Geo aus Token)
+                    ├── Rate Limiter (60 req/min pro Token, sonst pro IP)
                     └── McpAgent Durable Object (mcp.ts)
                               │
                     D1 Hauptdatenbank
@@ -57,12 +57,12 @@ Alle Deployments laufen auf derselben Codebasis — kein Fork, keine Doppelung. 
 
 | Schalter | Mechanismus | Wirkung |
 |---|---|---|
-| **Endpoint-Filter** | `ENDPOINT_BY_HOST` in `mcp.ts` (Host → Slug) | Welche Quellen aus der Haupt-DB sichtbar sind |
+| **Endpoint-Filter** | `ENDPOINT_BY_HOST` in `engine/endpoint-profiles.ts` (Host → `{tenancy, profile}`) | Welche Quellen sichtbar sind (`tenancy`) + Branding/Betriebskontrakt (`profile`) |
 | **Extensions-Filter** | `extensions`-Frontmatter + URL-Parameter | Thematische Einschränkung (z.B. Feuerwehr, Baurecht) |
-| **Authentifizierung** | `ACCESS_TOKEN` Wrangler-Secret | Aktiviert OAuth 2.0 Authorization Server + Auth Guard |
+| **Authentifizierung** | `ACCESS_TOKEN` (Passwort-Modus) oder `OAUTH_PUBLIC` (Geo-Picker-Modus) | Aktiviert OAuth 2.0 Authorization Server + Auth Guard |
 | **Zweite Datenbank** | `DB_GP1`-Binding in `wrangler.jsonc` | Transparente Dual-DB: vertrauliche Inhalte ohne Markierung gemergt |
 
-**Ein neues Deployment** = neue `env`-Sektion in `wrangler.jsonc` + Host in `ENDPOINT_BY_HOST` + `wrangler deploy --env <name>`.
+**Ein neues Deployment** = neue `env`-Sektion in `wrangler.jsonc` + Host-Eintrag in `ENDPOINT_BY_HOST` (`engine/endpoint-profiles.ts`) + `wrangler deploy --env <name>`.
 
 ---
 
@@ -71,13 +71,14 @@ Alle Deployments laufen auf derselben Codebasis — kein Fork, keine Doppelung. 
 ```
 ragsource-server/
 ├── src/
-│   ├── index.ts        # Entry Point: OAuth-Endpunkte, Auth Guard, Rate Limit, Routing
+│   ├── index.ts        # Entry Point: OAuth-Endpunkte, Auth Guard, Rate Limit, Geo-Injection, Routing
 │   ├── mcp.ts          # McpAgent Durable Object — MCP-Tools, Dual-DB-Logik
-│   ├── oauth.ts        # OAuth 2.0 Authorization Server (Authorization Code + PKCE)
+│   ├── oauth.ts        # OAuth 2.0 (Passwort-Login + passwortloser Geo-Picker), PKCE
 │   ├── types.ts        # TypeScript-Typen (Env, DB-Entitäten, Tool-Rückgaben)
 │   └── engine/
-│       ├── normalize.ts  # Geo-Auflösung: geo-Parameter → ARS + Ebene
-│       └── hierarchy.ts  # Normenhierarchie-Sortierung
+│       ├── normalize.ts          # Geo-Auflösung: geo-Parameter → ARS + Ebene
+│       ├── extensions.ts         # Extensions-Validierung gegen Taxonomie
+│       └── endpoint-profiles.ts  # Host-Mapping, Endpoint-Profile, Betriebskontrakte
 ├── scripts/
 │   ├── build-db-v2.ts    # Markdown → D1 Build-Pipeline
 │   ├── sql-utils.ts      # SQL-Escape + Concat-Tree (testbar)
@@ -189,11 +190,14 @@ npx tsx scripts/test-parser.ts  # Parser-Szenarien
 ### Deployen
 
 ```bash
-wrangler deploy                           # prod
-wrangler deploy --env lean                # lean (kein RAGSource_query)
-wrangler deploy --env paragrafenreiter    # alle Quellen sichtbar
-wrangler deploy --env brandmeister        # Feuerwehr-Deployment (public)
-wrangler deploy --env brandmeister-gp1    # mit OAuth-Auth + zweiter DB
+wrangler deploy                              # prod
+wrangler deploy --env lean                   # lean (kein RAGSource_query)
+wrangler deploy --env paragrafenreiter       # alle Quellen sichtbar
+wrangler deploy --env brandmeister           # Feuerwehr-Deployment (public)
+wrangler deploy --env brandmeister-gp1       # OAuth-Passwort-Auth + zweite DB
+wrangler deploy --env app-amtsschimmel       # ChatGPT App-Directory (Geo-Picker-OAuth)
+wrangler deploy --env app-brandmeister       # ChatGPT App-Directory
+wrangler deploy --env app-paragrafenreiter   # ChatGPT App-Directory
 ```
 
 ### DB remote befüllen
@@ -236,7 +240,7 @@ Bei OAuth-geschützten Deployments startet Claude Web den OAuth-Flow automatisch
 ## Neues Deployment anlegen
 
 1. **`wrangler.jsonc`**: neue `env`-Sektion mit eigenem `name` und Rate-Limit-`namespace_id`
-2. **`src/mcp.ts`**: Host in `ENDPOINT_BY_HOST` eintragen
+2. **`src/engine/endpoint-profiles.ts`**: Host in `ENDPOINT_BY_HOST` (+ ggf. Profil in `ENDPOINT_PROFILES`)
 3. **Quellen taggen**: `INSERT INTO source_endpoints (source_id, endpoint) VALUES (...)`
 4. **Deployen**: `wrangler deploy --env <name>`
 5. **Custom Domain**: Workers → Settings → Domains (Cloudflare Dashboard)

@@ -7,6 +7,20 @@ Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ## [Unreleased]
 
+### Hinzugefügt
+- **App-Directory:** ChatGPT-App-Endpoints für alle drei Marken — `app.amtsschimmel.ai`, `app.brandmeister.ai`, `app.paragrafenreiter.ai` (eigene wrangler-Envs `app-*`, `deploy.yml` erweitert)
+- **oauth:** Passwortloser OAuth-Modus (`OAUTH_PUBLIC`) — die Authorize-Seite ist ein Gemeinde-Picker mit Live-Autocomplete (`/oauth/geo-search`); der gewählte ARS wird an den Token gebunden und in `index.ts` als `?geo=`-Default in den MCP-Request injiziert. Passwort-Modus (`ACCESS_TOKEN`, GP1) unverändert.
+- **mcp:** Betriebskontrakt (`operating_rules`) — kompakte imperative Verhaltensregeln je Profil (KOMMUNAL/FEUERWEHR/GENERISCH), ausgeliefert in der ersten Catalog-Antwort pro Session
+- **mcp:** Endpoint-Profile als pures Datenmodul `engine/endpoint-profiles.ts`; Tenancy und Profil entkoppelt (`HostConfig {tenancy, profile}`)
+- **mcp:** `structuredContent` zusätzlich zum Text-JSON in `catalog`/`toc`/`get`/`query` (Apps-SDK-konform)
+- **geo:** Runtime-Nudge `geo_override_note` — Hinweis im Catalog-Response, wenn das Modell trotz voreingestelltem Default ein explizites `geo` übergibt (zweizweigig: legitimer Override vs. Kontext-Ableitung)
+- **engine/endpoint-profiles.test.ts:** Snapshot-Test für Profile + Host-Mapping
+
+### Geändert
+- **mcp:** Tool-Descriptions imperativ geschärft (MANDATORY/MUST, Routing-Logik, Wann-nicht)
+- **index:** Rate-Limiter-Key auf Token statt IP (ChatGPT bündelt Requests über wenige OpenAI-IPs); Fallback IP
+- **geo:** `GEO_PARAMETER_DESCRIPTION` — `geo` nicht aus dem Kontext ableiten, voreingestellten Default respektieren
+
 ---
 
 ## [2.8.0] — 2026-05-03
