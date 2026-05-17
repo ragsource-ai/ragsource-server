@@ -236,6 +236,11 @@ function buildFtsQuery(input: string): string | null {
  * Sonderwerte und das Verhalten bei Mehrdeutigkeit / Unbekanntem ab.
  */
 const GEO_PARAMETER_DESCRIPTION =
+  "IMPORTANT — omit this parameter on the FIRST RAGSource_catalog call. A geo default is " +
+  "normally preconfigured for the connection and is reported back in the response's 'geo' field. " +
+  "Pass geo ONLY (a) if a response returns 'geo_missing', or (b) to switch to a different location " +
+  "the user explicitly named. NEVER derive geo from general context — e.g. do not pass a state " +
+  "(Bundesland) code just because the topic concerns state law. " +
   "Geographic scope. Accepts ARS code or plain name. " +
   "ARS lengths: 2-digit (state), 5-digit (district), 9-digit (association), 12-digit (municipality). " +
   "Examples: '08' (BW), '083155012074', 'Müllheim Markgräflerland', 'Lkr Göppingen', 'Bayern', 'Breisgau-Hochschwarzwald'. " +
