@@ -559,9 +559,12 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         // damit die Heimatgemeinde überschrieben. Hinweis in die Antwort legen.
         const geoOverrideNote =
           (geoInput && this._currentGeo && geoInput !== this._currentGeo)
-            ? `Für diese Verbindung ist bereits eine Region voreingestellt. Du hast geo='${geoInput}' ` +
-              `explizit übergeben und damit den Default überschrieben. Falls der Nutzer KEINE andere ` +
-              `Region ausdrücklich genannt hat: RAGSource_catalog ohne geo-Parameter erneut aufrufen.`
+            ? `Für diese Verbindung ist bereits eine Region voreingestellt; mit geo='${geoInput}' ` +
+              `hast du eine abweichende Region gewählt. Prüfe: ` +
+              `(a) Hat der Nutzer diese Region ausdrücklich genannt (z.B. Vergleich mit einer anderen ` +
+              `Gemeinde, "wie in X")? Dann ist die geo-Übergabe korrekt — diesen Hinweis ignorieren. ` +
+              `(b) Falls nicht (geo nur aus dem Kontext/Rechtsgebiet abgeleitet): RAGSource_catalog ` +
+              `ohne geo-Parameter erneut aufrufen.`
             : null;
 
         // Fall a: kein geo → früher Abbruch mit Anweisungen
