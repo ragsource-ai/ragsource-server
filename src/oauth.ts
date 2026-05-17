@@ -24,7 +24,7 @@
  */
 
 import type { Env } from "./types.js";
-import { resolveGeo, suggestGeo, normalizeString, type GeoCandidate } from "./engine/normalize.js";
+import { resolveGeo, suggestGeo, searchByName, type GeoCandidate } from "./engine/normalize.js";
 import { resolveHostConfig, getEndpointProfile } from "./engine/endpoint-profiles.js";
 
 // -----------------------------------------------------------------------
@@ -192,27 +192,18 @@ export async function handleClientRegistration(request: Request, env: Env): Prom
 // -----------------------------------------------------------------------
 
 export async function handleGeoSearch(request: Request, env: Env): Promise<Response> {
-  const q = (new URL(request.url).searchParams.get("q") ?? "").trim().toLowerCase().slice(0, 80);
+  const q = (new URL(request.url).searchParams.get("q") ?? "").trim().slice(0, 80);
   if (q.length < 2) return json({ results: [] });
 
-  // Prefix-Match auf dem VOLLSTÄNDIGEN Gemeindenamen — damit "bad bo" gezielt
-  // "Bad Boll" findet (nicht nur das erste Token). Umlaut-normalisierte Variante
-  // mit; kürzere Namen zuerst, damit der exakte Treffer oben steht.
-  // Kreis-/Verband-/Landnamen löst resolveGeo() beim Absenden auf.
-  const normalized = normalizeString(q);
-  const rows = await env.DB
-    .prepare(
-      `SELECT ars, name, kreis FROM gemeinden
-        WHERE LOWER(name) LIKE ?1 OR LOWER(name) LIKE ?2
-        ORDER BY LENGTH(name) LIMIT 10`,
-    )
-    .bind(`${q}%`, `${normalized}%`)
-    .all<{ ars: string; name: string; kreis: string }>();
-  const results = (rows.results ?? []).map((r) => ({
-    ars: r.ars,
-    name: r.name,
-    kreis: r.kreis,
-    level: "gemeinde",
+  // Dieselbe Mehr-Ebenen-Suche wie der Backend-Resolver (resolveGeo nutzt
+  // searchByName intern): Gemeinde, Landkreis, Verband UND Land. So sind
+  // Picker-Autocomplete und Geo-Auflösung per Konstruktion deckungsgleich.
+  const candidates = await searchByName(q, env.DB);
+  const results = candidates.slice(0, 10).map((c) => ({
+    ars: c.ars,
+    name: c.name,
+    kreis: c.kreis,
+    level: c.typ,
   }));
   return json({ results });
 }
@@ -566,7 +557,11 @@ function pickerHtml(params: {
           (d.results || []).forEach(function (it) {
             var el = document.createElement('div');
             el.className = 'sug';
-            el.textContent = it.name + (it.kreis && it.kreis !== it.name ? ' · ' + it.kreis : '');
+            var lvl = { verband: 'Verband', kreis: 'Landkreis', land: 'Land' };
+            var sub = it.level === 'gemeinde'
+              ? (it.kreis && it.kreis !== it.name ? ' · ' + it.kreis : '')
+              : ' · ' + (lvl[it.level] || it.level);
+            el.textContent = it.name + sub;
             el.addEventListener('click', function () {
               inp.value = it.name; ars.value = it.ars; box.innerHTML = '';
             });
