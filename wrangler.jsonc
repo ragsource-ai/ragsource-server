@@ -336,16 +336,12 @@
     "app-amtsschimmel": {
       "name": "ragsource-api-v2-app-amtsschimmel",
       "vars": { "OAUTH_PUBLIC": "true" },
+      // Kein DB_STRUCTURED — kommunale App ohne Gefahrstoff-db_query.
       "d1_databases": [
         {
           "binding": "DB",
           "database_name": "ragsource-db-v2",
           "database_id": "55d4deda-60c5-4b70-a6d1-2b76f43e5715"
-        },
-        {
-          "binding": "DB_STRUCTURED",
-          "database_name": "ragsource-db-structured",
-          "database_id": "fb4f6270-5329-4d01-b5f3-901d8923874a"
         }
       ],
       "kv_namespaces": [
@@ -430,16 +426,12 @@
     "app-paragrafenreiter": {
       "name": "ragsource-api-v2-app-paragrafenreiter",
       "vars": { "OAUTH_PUBLIC": "true" },
+      // Kein DB_STRUCTURED — generische Recht-App ohne Gefahrstoff-db_query.
       "d1_databases": [
         {
           "binding": "DB",
           "database_name": "ragsource-db-v2",
           "database_id": "55d4deda-60c5-4b70-a6d1-2b76f43e5715"
-        },
-        {
-          "binding": "DB_STRUCTURED",
-          "database_name": "ragsource-db-structured",
-          "database_id": "fb4f6270-5329-4d01-b5f3-901d8923874a"
         }
       ],
       "kv_namespaces": [
