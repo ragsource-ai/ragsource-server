@@ -325,6 +325,153 @@
           }
         ]
       }
+    },
+
+    // -----------------------------------------------------------------------
+    // App-Directory-Endpoints (ChatGPT App / Apps SDK).
+    // Passwortloser OAuth-Geo-Picker (OAUTH_PUBLIC=true), gleiche Tenancy wie
+    // die jeweilige Marke. Custom Domains (app.<marke>.ai) im CF-Dashboard setzen.
+    // Deploy: wrangler deploy --env app-amtsschimmel | app-brandmeister | app-paragrafenreiter
+    // -----------------------------------------------------------------------
+    "app-amtsschimmel": {
+      "name": "ragsource-api-v2-app-amtsschimmel",
+      "vars": { "OAUTH_PUBLIC": "true" },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "ragsource-db-v2",
+          "database_id": "55d4deda-60c5-4b70-a6d1-2b76f43e5715"
+        },
+        {
+          "binding": "DB_STRUCTURED",
+          "database_name": "ragsource-db-structured",
+          "database_id": "fb4f6270-5329-4d01-b5f3-901d8923874a"
+        }
+      ],
+      "kv_namespaces": [
+        {
+          "binding": "CONFIG",
+          "id": "e0af38b6cee446adb258055e172c8a26"
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "class_name": "RAGSourceMCPv2",
+            "name": "MCP_OBJECT"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "new_sqlite_classes": ["RAGSourceMCPv2"],
+          "tag": "v1"
+        }
+      ],
+      "unsafe": {
+        "bindings": [
+          {
+            "type": "ratelimit",
+            "name": "RATE_LIMITER",
+            "namespace_id": "1007",
+            "simple": { "limit": 60, "period": 60 }
+          }
+        ]
+      }
+    },
+
+    "app-brandmeister": {
+      "name": "ragsource-api-v2-app-brandmeister",
+      "vars": { "OAUTH_PUBLIC": "true" },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "ragsource-db-v2",
+          "database_id": "55d4deda-60c5-4b70-a6d1-2b76f43e5715"
+        },
+        {
+          "binding": "DB_STRUCTURED",
+          "database_name": "ragsource-db-structured",
+          "database_id": "fb4f6270-5329-4d01-b5f3-901d8923874a"
+        }
+      ],
+      "kv_namespaces": [
+        {
+          "binding": "CONFIG",
+          "id": "e0af38b6cee446adb258055e172c8a26"
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "class_name": "RAGSourceMCPv2",
+            "name": "MCP_OBJECT"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "new_sqlite_classes": ["RAGSourceMCPv2"],
+          "tag": "v1"
+        }
+      ],
+      "unsafe": {
+        "bindings": [
+          {
+            "type": "ratelimit",
+            "name": "RATE_LIMITER",
+            "namespace_id": "1008",
+            "simple": { "limit": 60, "period": 60 }
+          }
+        ]
+      }
+    },
+
+    "app-paragrafenreiter": {
+      "name": "ragsource-api-v2-app-paragrafenreiter",
+      "vars": { "OAUTH_PUBLIC": "true" },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "ragsource-db-v2",
+          "database_id": "55d4deda-60c5-4b70-a6d1-2b76f43e5715"
+        },
+        {
+          "binding": "DB_STRUCTURED",
+          "database_name": "ragsource-db-structured",
+          "database_id": "fb4f6270-5329-4d01-b5f3-901d8923874a"
+        }
+      ],
+      "kv_namespaces": [
+        {
+          "binding": "CONFIG",
+          "id": "e0af38b6cee446adb258055e172c8a26"
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "class_name": "RAGSourceMCPv2",
+            "name": "MCP_OBJECT"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "new_sqlite_classes": ["RAGSourceMCPv2"],
+          "tag": "v1"
+        }
+      ],
+      "unsafe": {
+        "bindings": [
+          {
+            "type": "ratelimit",
+            "name": "RATE_LIMITER",
+            "namespace_id": "1009",
+            "simple": { "limit": 60, "period": 60 }
+          }
+        ]
+      }
     }
   }
 }

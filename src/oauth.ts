@@ -25,6 +25,7 @@
 
 import type { Env } from "./types.js";
 import { resolveGeo, suggestGeo, type GeoCandidate } from "./engine/normalize.js";
+import { resolveHostConfig, getEndpointProfile } from "./engine/endpoint-profiles.js";
 
 // -----------------------------------------------------------------------
 // Typen
@@ -95,6 +96,23 @@ function htmlResponse(html: string, status = 200): Response {
 /** True, wenn der passwortlose Geo-Picker-Modus aktiv ist. */
 function isPublicMode(env: Env): boolean {
   return env.OAUTH_PUBLIC === "true";
+}
+
+/** Branding der Geo-Picker-Seite. */
+interface PickerBranding {
+  name: string;
+  subtitle: string;
+  accent: string;
+}
+
+/** Ermittelt das Picker-Branding aus dem Host (über das Endpoint-Profil). */
+function pickerBrandingFor(hostname: string): PickerBranding {
+  const profile = getEndpointProfile(resolveHostConfig(hostname)?.profile);
+  return profile.pickerBranding ?? {
+    name: "RAGSource",
+    subtitle: "Zitiersichere Rechtsrecherche",
+    accent: "#1e3a5f",
+  };
 }
 
 // -----------------------------------------------------------------------
@@ -219,7 +237,7 @@ export async function handleAuthorize(request: Request, env: Env): Promise<Respo
 
     const formParams = { clientId, redirectUri, state, codeChallenge, codeChallengeMethod };
     if (publicMode) {
-      return htmlResponse(pickerHtml(formParams));
+      return htmlResponse(pickerHtml({ ...formParams, branding: pickerBrandingFor(url.hostname) }));
     }
     return htmlResponse(loginHtml({ ...formParams, error }));
   }
@@ -239,9 +257,10 @@ export async function handleAuthorize(request: Request, env: Env): Promise<Respo
       // Geo-Picker-Modus: gewählten ARS bzw. Freitext auflösen.
       // geo_ars (Hidden-Field, aus Autocomplete/Kandidaten-Button) hat Vorrang
       // vor geo_input (Freitext).
+      const branding = pickerBrandingFor(url.hostname);
       const rawGeo = ((form.get("geo_ars") as string) || (form.get("geo_input") as string) || "").trim();
       if (!rawGeo) {
-        return htmlResponse(pickerHtml({ ...formParams, error: "Bitte wählen Sie Ihre Gemeinde." }));
+        return htmlResponse(pickerHtml({ ...formParams, branding, error: "Bitte wählen Sie Ihre Gemeinde." }));
       }
 
       const resolved = await resolveGeo(rawGeo, env.DB);
@@ -249,6 +268,7 @@ export async function handleAuthorize(request: Request, env: Env): Promise<Respo
         const sugg = await suggestGeo(rawGeo, env.DB, 6);
         return htmlResponse(pickerHtml({
           ...formParams,
+          branding,
           error: `„${rawGeo}" wurde nicht gefunden. Bitte erneut versuchen.`,
           candidates: sugg,
         }));
@@ -256,6 +276,7 @@ export async function handleAuthorize(request: Request, env: Env): Promise<Respo
       if ("ambiguous" in resolved) {
         return htmlResponse(pickerHtml({
           ...formParams,
+          branding,
           error: "Mehrere Treffer — bitte wählen Sie aus:",
           candidates: resolved.candidates,
         }));
@@ -417,10 +438,11 @@ function pickerHtml(params: {
   state: string;
   codeChallenge: string;
   codeChallengeMethod: string;
+  branding: PickerBranding;
   error?: string;
   candidates?: GeoCandidate[];
 }): string {
-  const { clientId, redirectUri, state, codeChallenge, codeChallengeMethod, error, candidates } = params;
+  const { clientId, redirectUri, state, codeChallenge, codeChallengeMethod, branding, error, candidates } = params;
 
   const candidatesHtml = (candidates && candidates.length > 0)
     ? `<div class="candidates">${candidates
@@ -438,7 +460,7 @@ function pickerHtml(params: {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>amtsschimmel.ai – Gemeinde wählen</title>
+  <title>${esc(branding.name)} – Gemeinde wählen</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -452,7 +474,7 @@ function pickerHtml(params: {
       box-shadow: 0 2px 20px rgba(0,0,0,.12);
       padding: 2rem; width: 100%; max-width: 420px;
     }
-    .logo { font-size: 1.4rem; font-weight: 700; color: #1e3a5f; }
+    .logo { font-size: 1.4rem; font-weight: 700; color: ${esc(branding.accent)}; }
     .subtitle { font-size: .875rem; color: #64748b; margin: .15rem 0 1.4rem; }
     label { display: block; font-size: .875rem; font-weight: 600; color: #334155; margin-bottom: .4rem; }
     .hint { font-size: .8rem; color: #64748b; margin-bottom: 1rem; }
@@ -462,7 +484,7 @@ function pickerHtml(params: {
       border: 1px solid #cbd5e1; border-radius: 9px;
       font-size: 1rem; outline: none; transition: border-color .15s;
     }
-    input[type="text"]:focus { border-color: #1e3a5f; }
+    input[type="text"]:focus { border-color: ${esc(branding.accent)}; }
     .suggestions {
       position: absolute; left: 0; right: 0; top: calc(100% + 4px);
       background: #fff; border: 1px solid #cbd5e1; border-radius: 9px;
@@ -482,16 +504,16 @@ function pickerHtml(params: {
     .cand em { font-style: normal; font-size: .75rem; color: #64748b; }
     button.submit {
       margin-top: 1.3rem; width: 100%; padding: .7rem;
-      background: #1e3a5f; color: #fff; border: none; border-radius: 9px;
-      font-size: 1rem; font-weight: 600; cursor: pointer; transition: background .15s;
+      background: ${esc(branding.accent)}; color: #fff; border: none; border-radius: 9px;
+      font-size: 1rem; font-weight: 600; cursor: pointer; transition: filter .15s;
     }
-    button.submit:hover { background: #16304d; }
+    button.submit:hover { filter: brightness(0.92); }
   </style>
 </head>
 <body>
   <div class="card">
-    <div class="logo">amtsschimmel.ai</div>
-    <div class="subtitle">Die kommunale Wissensbasis</div>
+    <div class="logo">${esc(branding.name)}</div>
+    <div class="subtitle">${esc(branding.subtitle)}</div>
 
     <form method="POST" action="/oauth/authorize" id="f" autocomplete="off">
       <input type="hidden" name="client_id" value="${esc(clientId)}">

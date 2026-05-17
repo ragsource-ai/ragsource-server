@@ -23,7 +23,7 @@ import type {
   QueryHit,
 } from "./types.js";
 import { resolveGeo, suggestGeo, type ResolvedGeo, type AmbiguousGeo, type GeoCandidate } from "./engine/normalize.js";
-import { getEndpointProfile, buildNotConfiguredHinweis } from "./engine/endpoint-profiles.js";
+import { getEndpointProfile, buildNotConfiguredHinweis, resolveHostConfig, type HostConfig } from "./engine/endpoint-profiles.js";
 import { resolveExtensions, buildExtensionsWarning, EXTENSIONS_PARAMETER_DESCRIPTION, type ExtensionResolution } from "./engine/extensions.js";
 
 // -----------------------------------------------------------------------
@@ -270,36 +270,22 @@ const INSTRUCTIONS =
 
 // -----------------------------------------------------------------------
 // Projekt-Erkennung via Host-Header
+//
+// Host → {tenancy, profile} sowie Endpoint-Profile leben als pures Datenmodul
+// in ./engine/endpoint-profiles.ts (oben importiert). Hier nur die Auflösung
+// gegen den aktuellen Request-Host.
 // -----------------------------------------------------------------------
 
-/**
- * Mappt Hostnamen auf Endpoint-Slugs (Tenancy).
- * "all" = kein Endpoint-Filter (alles durch, z.B. für paragrafenreiter.ai).
- * Kein Eintrag = Direktaufruf, ebenfalls kein Filter.
- */
-const ENDPOINT_BY_HOST: Record<string, string> = {
-  "mcp.amtsschimmel.ai": "amtsschimmel",
-  "mcp-lean.amtsschimmel.ai": "amtsschimmel",
-  "mcp.paragrafenreiter.ai": "all",
-  "mcp.brandmeister.ai": "brandmeister",
-  "mcp-gp1.brandmeister.ai": "brandmeister",
-  "mcp-ct1.ragsource.ai": "all",
-};
-
-/** Gibt den Endpoint-Slug des aktuellen Hosts zurück. */
-function resolveMandatoryEndpoint(): string | undefined {
+/** Host-Konfiguration (Tenancy + Profil) des aktuellen Requests. */
+function currentHostConfig(): HostConfig | undefined {
   try {
     const { request } = getCurrentAgent();
     const hostname = new URL(request?.url ?? "").hostname;
-    return ENDPOINT_BY_HOST[hostname] ?? undefined;
+    return resolveHostConfig(hostname);
   } catch {
     return undefined;
   }
 }
-
-// Endpoint-Profile (Branding + Betriebskontrakt) leben als pures Datenmodul
-// in ./engine/endpoint-profiles.ts — getEndpointProfile / buildNotConfiguredHinweis
-// werden oben importiert.
 
 // -----------------------------------------------------------------------
 // Geo-Hilfsfunktionen
@@ -548,8 +534,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
 
         // Endpoint-Profile liefert das Branding (system_message) und die
         // Kontaktmail für not_configured — statisch im Code, in git versioniert.
-        const currentEndpoint = resolveMandatoryEndpoint();
-        const profile = getEndpointProfile(currentEndpoint);
+        const profile = getEndpointProfile(currentHostConfig()?.profile);
 
         // KV `system_message` (ohne Suffix, global): optionaler Wartungs-/Live-Banner.
         // Überschreibt das Endpoint-Branding solange er gesetzt ist (für alle Endpoints
@@ -599,7 +584,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         }
 
         const geoFilter = geoSpecialFilter ?? buildGeoFilter(geo);
-        const endpointFilter = buildEndpointFilter(resolveMandatoryEndpoint());
+        const endpointFilter = buildEndpointFilter(currentHostConfig()?.tenancy);
         // Extension-Auflösung: rohe LLM-Eingabe → kanonische Taxonomie-Werte.
         // Unbekanntes (z.B. "Feuerwehr", "Aufwandsentschädigung") wird gemappt
         // (per Synonym/Prefix) oder ignoriert — niemals 1:1 in die SQL übernommen.
@@ -1055,7 +1040,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         // Bei ambiguem Geo im query-Tool: kein Geo-Filter (FTS sucht im Gesamtbestand)
         const geo = (geoResult && "ambiguous" in geoResult ? null : geoResult) as ResolvedGeo | null;
         const geoFilter = buildGeoFilter(geo);
-        const endpointFilter = buildEndpointFilter(resolveMandatoryEndpoint());
+        const endpointFilter = buildEndpointFilter(currentHostConfig()?.tenancy);
         // Extension-Auflösung: gleiche Validierung wie in RAGSource_catalog
         const rawExtensions = extensionsInput?.length ? extensionsInput : this._currentExtensions;
         const extResolution = resolveExtensions(rawExtensions);
@@ -1179,7 +1164,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     if (this.env.DB_STRUCTURED) {
       const structDb = this.env.DB_STRUCTURED;
-      const currentEndpoint = ENDPOINT_BY_HOST[this._currentHost] ?? undefined;
+      const currentEndpoint = resolveHostConfig(this._currentHost)?.tenancy;
 
       // Datenbanken laden (Endpoint-Filter: NULL = universell, sonst nur passende)
       type DbMetaRow = {
