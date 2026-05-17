@@ -553,6 +553,17 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         // die beim DO-Reuse stale sein kann.
         const effectiveGeo = geoInput ?? (this._currentGeo || null);
 
+        // Runtime-Nudge: Das Modell hat explizit ein geo übergeben, obwohl für die
+        // Verbindung bereits ein Default voreingestellt ist (Token/URL). Häufiger
+        // Fehler: geo aus dem Kontext abgeleitet (z.B. "08" wegen Landesrecht) und
+        // damit die Heimatgemeinde überschrieben. Hinweis in die Antwort legen.
+        const geoOverrideNote =
+          (geoInput && this._currentGeo && geoInput !== this._currentGeo)
+            ? `Für diese Verbindung ist bereits eine Region voreingestellt. Du hast geo='${geoInput}' ` +
+              `explizit übergeben und damit den Default überschrieben. Falls der Nutzer KEINE andere ` +
+              `Region ausdrücklich genannt hat: RAGSource_catalog ohne geo-Parameter erneut aufrufen.`
+            : null;
+
         // Fall a: kein geo → früher Abbruch mit Anweisungen
         if (!effectiveGeo) {
           return buildNoGeoResponse(systemMessage);
@@ -714,6 +725,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
         const payload = {
           ...(systemMessage && { system_message: systemMessage }),
           ...(operatingRules && { operating_rules: operatingRules }),
+          ...(geoOverrideNote && { geo_override_note: geoOverrideNote }),
           geo: geoInfo,
           ...(extensionsBlock && extensionsBlock),
           total: sorted.length,
