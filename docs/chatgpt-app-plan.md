@@ -1,7 +1,8 @@
 # ChatGPT App-Directory — Umsetzungsplan & Status
 
 > Stand: 2026-05-17 · Branch: `feature/chatgpt-app`
-> **Code AP1–AP4 abgeschlossen** (Commits auf dem Branch). Offen: Deployment + Submission (manuell).
+> **Code AP1–AP4 abgeschlossen, alle 3 Worker deployed, Custom Domains live, in ChatGPT validiert.**
+> Geo-Default + Multi-ARS-Override im Live-Test bestätigt. Offen: nur noch die Submission (manuell).
 
 RAGSource wird als **ChatGPT App** (Apps SDK, MCP) ins App-Directory gebracht —
 One-Click-Install, kein Developer Mode, voller agentischer Flow. Drei Marken-Apps
