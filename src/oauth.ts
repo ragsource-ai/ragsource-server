@@ -24,7 +24,7 @@
  */
 
 import type { Env } from "./types.js";
-import { resolveGeo, suggestGeo, searchByName, type GeoCandidate } from "./engine/normalize.js";
+import { resolveGeo, suggestGeo, normalizeString, type GeoCandidate } from "./engine/normalize.js";
 import { resolveHostConfig, getEndpointProfile } from "./engine/endpoint-profiles.js";
 
 // -----------------------------------------------------------------------
@@ -192,18 +192,39 @@ export async function handleClientRegistration(request: Request, env: Env): Prom
 // -----------------------------------------------------------------------
 
 export async function handleGeoSearch(request: Request, env: Env): Promise<Response> {
-  const q = (new URL(request.url).searchParams.get("q") ?? "").trim().slice(0, 80);
-  if (q.length < 2) return json({ results: [] });
+  const raw = (new URL(request.url).searchParams.get("q") ?? "").trim().toLowerCase().slice(0, 80);
+  if (raw.length < 2) return json({ results: [] });
+  const norm = normalizeString(raw);
 
-  // Dieselbe Mehr-Ebenen-Suche wie der Backend-Resolver (resolveGeo nutzt
-  // searchByName intern): Gemeinde, Landkreis, Verband UND Land. So sind
-  // Picker-Autocomplete und Geo-Auflösung per Konstruktion deckungsgleich.
-  const candidates = await searchByName(q, env.DB);
-  const results = candidates.slice(0, 10).map((c) => ({
-    ars: c.ars,
-    name: c.name,
-    kreis: c.kreis,
-    level: c.typ,
+  // Mehr-Ebenen-Prefix-Suche über Gemeinde, Landkreis, Verband UND Land —
+  // damit auch Bundesländer/Kreise/Verbände im Autocomplete erscheinen.
+  // Straffe Prefix-Suche (kein Substring-AND), kürzeste Namen zuerst.
+  // ?1 = Eingabe, ?2 = umlaut-normalisierte Variante.
+  const sql = `
+    SELECT ars, name, kreis, level FROM (
+      SELECT ars, name, kreis, 'gemeinde' AS level FROM gemeinden
+        WHERE LOWER(name) LIKE ?1 OR LOWER(name) LIKE ?2
+      UNION
+      SELECT kreis_ars AS ars, kreis AS name, NULL AS kreis, 'kreis' AS level FROM gemeinden
+        WHERE LOWER(kreis) LIKE ?1 OR LOWER(kreis) LIKE ?2 GROUP BY kreis_ars
+      UNION
+      SELECT verband_ars AS ars, verband AS name, NULL AS kreis, 'verband' AS level FROM gemeinden
+        WHERE verband_ars IS NOT NULL AND (LOWER(verband) LIKE ?1 OR LOWER(verband) LIKE ?2) GROUP BY verband_ars
+      UNION
+      SELECT land_ars AS ars, land AS name, NULL AS kreis, 'land' AS level FROM gemeinden
+        WHERE LOWER(land) LIKE ?1 OR LOWER(land) LIKE ?2 GROUP BY land_ars
+    )
+    ORDER BY LENGTH(name) LIMIT 10
+  `;
+  const rows = await env.DB
+    .prepare(sql)
+    .bind(`${raw}%`, `${norm}%`)
+    .all<{ ars: string; name: string; kreis: string | null; level: string }>();
+  const results = (rows.results ?? []).map((r) => ({
+    ars: r.ars,
+    name: r.name,
+    kreis: r.kreis,
+    level: r.level,
   }));
   return json({ results });
 }

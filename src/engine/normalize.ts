@@ -195,7 +195,7 @@ export function prepareLookup(input: string): LookupParts | null {
   return { lower, normalized, tokens, tokensNorm, levelHint };
 }
 
-export async function searchByName(input: string, db: D1Database): Promise<GeoCandidate[]> {
+async function searchByName(input: string, db: D1Database): Promise<GeoCandidate[]> {
   const parts = prepareLookup(input);
   if (!parts) return [];
 
