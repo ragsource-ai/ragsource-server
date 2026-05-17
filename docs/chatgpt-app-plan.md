@@ -1,159 +1,62 @@
-# Umsetzungsplan: ChatGPT App `app.amtsschimmel.ai`
+# ChatGPT App-Directory — Umsetzungsplan & Status
 
-> Stand: 2026-05-17 · Repo: `ragsource-server` · Branch: `feature/chatgpt-app`
-> Ziel: RAGSource als ChatGPT App ins App-Directory bringen — One-Click-Install,
-> kein Developer Mode, voller agentischer Flow.
+> Stand: 2026-05-17 · Branch: `feature/chatgpt-app`
+> **Code AP1–AP4 abgeschlossen** (Commits auf dem Branch). Offen: Deployment + Submission (manuell).
 
----
+RAGSource wird als **ChatGPT App** (Apps SDK, MCP) ins App-Directory gebracht —
+One-Click-Install, kein Developer Mode, voller agentischer Flow. Drei Marken-Apps
+auf gemeinsamem Core:
 
-## 1. Hintergrund & getroffene Entscheidungen
+| App | Host | Tenancy | Profil |
+|---|---|---|---|
+| amtsschimmel | `app.amtsschimmel.ai` | amtsschimmel | `amtsschimmel-app` |
+| brandmeister | `app.brandmeister.ai` | brandmeister | `brandmeister-app` |
+| paragrafenreiter | `app.paragrafenreiter.ai` | all | `paragrafenreiter-app` |
 
-**Ausgangslage:** RAGSource ist bereits ein MCP-Server (Streamable HTTP, Cloudflare
-Workers). ChatGPT konsumiert seit der Apps-SDK-Einführung dasselbe Protokoll.
+Die `mcp.*`-Endpoints (No-Auth, Claude/Embedding) bleiben dauerhaft bestehen.
 
-**Kernentscheidungen:**
+## Architekturentscheidungen
 
-- **Ziel = ChatGPT App-Directory** (Apps SDK), nicht GPT Actions, nicht Connector.
-  Nur die App behält den vollen agentischen Flow (`catalog/toc/get/query`) — der
-  `search`/`fetch`-Zwang gilt nur für Connector-/Deep-Research-Standardmodus.
-- **Dev-Mode-Connector skaliert nicht** (Plus-Abo + „ERHÖHTES RISIKO"-Toggle pro
-  Nutzer) — nur als Tester-Werkzeug brauchbar. Directory-Listing = echter One-Click.
-- **Eigener Host `app.amtsschimmel.ai`**, Endpoint-Slug `app` (neutral — bedient
-  perspektivisch auch Claude). `mcp.amtsschimmel.ai` bleibt **dauerhaft** als
-  No-Auth-/Legacy-/Embedding-Pfad bestehen — installierte Connectors nie brechen.
-- **Gemeinde-Auswahl beim Verbinden** über die OAuth-Authorize-Seite (Live-
-  Autocomplete-Picker). Der gewählte ARS wird an den Token gebunden.
-- **Systemprompt wird nicht mehr an Nutzer ausgeliefert** — kein Slot in einer
-  Directory-App. Verhalten reist server-seitig mit: kompakter Betriebskontrakt +
-  Tool-Descriptions.
-- **`search`/`fetch`** = optional, frühestens nach Directory-Launch.
+- **Ziel = App-Directory** (Apps SDK), nicht GPT Actions, nicht Connector. Nur die
+  App behält den vollen Flow (`catalog/toc/get/query`).
+- **Ein Core + dünne Profile.** `EndpointProfile` ist ein pures Datenobjekt; ein
+  neues Frontend = ein Profil + ein wrangler-Env. Profil ≠ Tenancy entkoppelt
+  (`HostConfig {tenancy, profile}`): App zeigt Marken-Content, trägt eigenes Profil.
+- **Gemeinde-Auswahl beim Verbinden** über die OAuth-Authorize-Seite (passwortloser
+  Modus `OAUTH_PUBLIC`, Live-Autocomplete-Picker). ARS wird an den Token gebunden,
+  als `?geo=`-Default injiziert; explizites Tool-`geo` überschreibt (Multi-ARS).
+- **Verhalten reist server-seitig:** kompakter Betriebskontrakt (`operating_rules`,
+  erste Catalog-Antwort pro Session) + imperative Tool-Descriptions. Kein
+  nutzerseitiger Systemprompt mehr.
 
-## 2. Architekturprinzip — ein Core, dünne Profile
+## Umgesetzt (Code)
 
-Es entstehen **keine zwei Produkte**, sondern ein Core + Delivery-Profile:
-
-| Schicht | Datei | Legt fest |
+| AP | Inhalt | Status |
 |---|---|---|
-| Deployment | `wrangler.jsonc` env | Host, D1-Bindings, `OAUTH_PUBLIC`/`ACCESS_TOKEN`, Rate-Limiter-Namespace |
-| Routing | `ENDPOINT_BY_HOST` (`mcp.ts:279`) | Host → Endpoint-Slug |
-| Frontend-Profil | `ENDPOINT_PROFILES` (`mcp.ts:318`) | **Pures Datenobjekt:** `systemMessage`, `contactMail`, `operatingRules`, optional `toolDescriptionOverride` — null Logik |
-| Core-Verhalten | `mcp.ts`-Funktionen | Catalog-Response, Tool-Descriptions, `INSTRUCTIONS` — einmalig, profil-parametrisiert |
-| Core-Mechanik | `oauth.ts` / `index.ts` | Geo-Picker, Token-Geo-Bindung, Auth-Guard, Geo-Injection, Limiter-Keying |
+| AP1 | OAuth-Geo-Bindung, Geo-Picker, `handleGeoSearch`, Token-Rate-Limiter | ✅ |
+| AP2 | `operatingRules` im Endpoint-Profil, Auslieferung erste Catalog-Antwort | ✅ |
+| AP3 | Tool-Descriptions imperativ, `structuredContent`, Profil-Modul, Snapshot-Test | ✅ |
+| AP4 | 3 App-Profile + 3 Betriebskontrakte, `wrangler.jsonc`-Envs, `deploy.yml`, brand-aware Picker | ✅ |
 
-**Ein neues Frontend = ein Profil-Eintrag + ein wrangler-Env. Null Core-Code.**
+Geänderte Dateien: `src/engine/endpoint-profiles.ts` (neu), `src/oauth.ts`,
+`src/index.ts`, `src/mcp.ts`, `src/types.ts`, `wrangler.jsonc`,
+`.github/workflows/deploy.yml`, `src/engine/endpoint-profiles.test.ts` (neu).
+Typecheck sauber, 93 Tests grün.
 
-Descriptions/Instructions sind heute bereits 100 % Core. Eine **geteilte** imperative
-`INSTRUCTIONS` + **ein** geteilter geschärfter Description-Satz bedienen Claude und
-ChatGPT (kurz/imperativ schadet Claude nicht). Kein Endpoint-Split. Einzige echte
-Profil-Erweiterung: `operatingRules`.
+## Offen — Deployment & Submission (manuell, pro Marke)
 
-## 3. Geo-Modell
-
-Drei Ebenen, klar getrennt:
-
-- **Per-Call-Override** (existiert, `mcp.ts:613` `effectiveGeo = geoInput ?? _currentGeo`):
-  Tool-Argument `geo` gewinnt → Multi-ARS-Fähigkeit. Keine Änderung nötig.
-- **Default** = `_currentGeo`, gefüttert aus URL-`?geo=` (No-Auth) **oder** aus dem
-  OAuth-Token (App). Beide Wege münden in denselben Slot — DO-Geo-Logik bleibt
-  unverändert, Abw-Kompatibilität strukturell garantiert.
-- **Sticky-Switch** (server-seitig gemerkt) — bewusst NICHT gebaut; DO hält
-  `_currentGeo` aber mutabel, also jederzeit nachrüstbar.
-
-Der Token bindet den Default, **nicht** die erlaubte Reichweite — explizites `geo`
-nie gegen den Token validieren.
-
----
-
-## AP0 — Vorbereitung (parallel, kein Code)
-
-- [ ] **OpenAI-Developer-Account** anlegen + verifizieren — Blocker für AP4, früh starten.
-- [ ] CF: DNS für `app.amtsschimmel.ai` bereitstellen (Custom-Domain-Zuweisung nach erstem Deploy).
-- [ ] Datenschutz-URL auf amtsschimmel.ai notieren (existiert) — für Submission.
-
-## AP1 — Core: OAuth-Geo-Bindung + Rate-Limiter (~2 Tage)
-
-- [ ] `types.ts`: `OAUTH_PUBLIC?: string` ergänzen (entkoppelt OAuth-Aktivierung vom Passwort).
-- [ ] `oauth.ts`:
-  - [ ] `OAuthCode` um `geo: string` erweitern; Token-KV-Wert `"1"` → `JSON.stringify({ geo })`.
-  - [ ] `loginHtml()` → `pickerHtml()`: Live-Autocomplete-Geo-Feld, Hidden-Field hält gewählten ARS.
-  - [ ] Neuer Handler `handleGeoSearch()` → `GET /oauth/geo-search?q=` → JSON `[{name, ars, level}]`
-        aus `geo_aliases` (LIKE, Limit 10). Picker = Geo, nicht nur Gemeinde (Kreis/Verband/Land mitwählbar).
-  - [ ] POST: ARS via `resolveGeo()` validieren → in `OAuthCode`. Passwortprüfung nur im
-        `ACCESS_TOKEN`-Modus; bei `OAUTH_PUBLIC` entfällt sie.
-  - [ ] `handleToken`: `geo` in den Token-KV-Wert übernehmen.
-  - [ ] `validateBearer()`: Rückgabe `boolean` → `{ valid, geo }`.
-- [ ] `index.ts`:
-  - [ ] OAuth-Endpunkte + `/oauth/geo-search` aktiv bei `ACCESS_TOKEN || OAUTH_PUBLIC`.
-  - [ ] Auth-Guard: gültiger Token mit geo → Request-URL klonen, `?geo=<ARS>` setzen, weiterreichen.
-  - [ ] Rate-Limiter-Key: `token ?? CF-Connecting-IP` (ChatGPT bündelt über wenige OpenAI-IPs).
-- [ ] DO-Geo-Logik (`mcp.ts`): **keine Änderung**.
-
-**Done:** OAuth-Flow liefert geo-gebundenen Token; Call ohne `geo` nutzt Token-ARS,
-mit explizitem `geo` überschreibt.
-
-## AP2 — Core: operatingRules (~0,5 Tag)
-
-- [ ] `EndpointProfile` + Feld `operatingRules?: string` (reines Datenfeld).
-- [ ] Core-Konstante `OPERATING_RULES_KOMMUNAL` — ≤ 400 Tokens, imperativ-nummeriert,
-      kein Fließtext/Rationale. Destilliert aus `src/prompts/masterprompt-amtsschimmel.md`
-      (bleibt redaktionelle Quelle). Richtung:
-  1. Immer zuerst RAGSource_catalog. Keine Rechtsaussage ohne Catalog.
-  2. Nur §§ zitieren, deren Wortlaut per RAGSource_get geladen wurde.
-  3. Schlussfolgerungen als „Einschätzung" markieren — kein Zitat.
-  4. Fehlende Quellenlage offen benennen, nie still mit Allgemeinwissen füllen.
-  5. Kommunale/spezifische Quellen vor allgemeinen priorisieren.
-  6. Für eine andere Gemeinde den geo-Parameter explizit übergeben.
-- [ ] Catalog-Tool: wenn `operatingRules` gesetzt **und** DO-Flag `_rulesSent` false →
-      Feld `operating_rules` in die Response, Flag setzen (nur erster Catalog-Call pro Session).
-- [ ] `INSTRUCTIONS` (`mcp.ts:249`) auf kurze imperative Fassung straffen (eine, geteilt;
-      Inhalt unverändert: Workflow + Säule 1/2 + Normhierarchie).
-
-## AP3 — Core: Tool-Descriptions schärfen (~1 Tag)
-
-- [ ] Descriptions `catalog`/`toc`/`get`/`query` (`mcp.ts:571/792/889/1071`) imperativ
-      überarbeiten: MUST/ALWAYS, Routing-Logik, Wann-nicht. Bleiben Core, geteilt.
-- [ ] `EndpointProfile`: optionales `toolDescriptionOverride` als Reserve definieren,
-      **leer lassen**.
-- [ ] Apps-SDK-Output prüfen: liefern Tool-Rückgaben `structuredContent`? Ggf. ergänzen.
-
-**Refactor-Disziplin (AP2+AP3):** `EndpointProfile` bleibt logikfrei. Bestehende
-Profile (`amtsschimmel`/`brandmeister`/`all`/`default`) müssen identischen Output
-liefern → **Snapshot-Test** ergänzen (Muster: `src/engine/extensions.test.ts`).
-
-## AP4 — Profil, Deployment, Submission (~0,5 Tag + Review)
-
-- [ ] `mcp.ts`: `ENDPOINT_BY_HOST` + `"app.amtsschimmel.ai": "app"`;
-      `ENDPOINT_PROFILES["app"]` (amtsschimmel-Branding + `operatingRules`).
-- [ ] `wrangler.jsonc`: Env `app` — amtsschimmel-Bindings, `vars: { OAUTH_PUBLIC: "true" }`,
-      Rate-Limiter `namespace_id: 1007`.
-- [ ] `wrangler deploy --env app` → CF Custom Domain `app.amtsschimmel.ai` zuweisen.
-- [ ] Submission-Paket: Logo (PNG ≥ 128 px), Screenshots, Test-Prompts, Beschreibung in
-      Nutzersprache (*„Fragen Sie Ihre Gemeindeordnung direkt in ChatGPT"*),
-      Datenschutz-URL, Firmeninfo → Dashboard-Review.
-
-## Test-Phase (vor Submission)
-
-- [ ] `app.amtsschimmel.ai` im ChatGPT Dev Mode verbinden.
-- [ ] Picker: Autocomplete, Auswahl Bad Boll, Mehrdeutigkeit, Nicht-gefunden.
-- [ ] Geo: Frage ohne `geo` → Bad-Boll-Quellen; „…in Ulm" → Ulm-Quellen (Multi-ARS).
-- [ ] Instruction-Following: catalog-zuerst, Säule-1-Pflicht.
-- [ ] Claude-Regression: `mcp.amtsschimmel.ai` unverändert.
-
----
-
-## Sequencing & Aufwand
-
-AP0 sofort parallel · AP1 → AP2 + AP3 (parallel) → Test → AP4.
-**Code gesamt ~3,5–4 Tage** + externe Review-Wartezeit.
-
-## Risiken
-
-1. Refactor-Regression bei Profilen → Snapshot-Test fängt es.
-2. GPT-5 Instruction-Following schwächer als Claude → Dev-Mode-Test ist der Prüfstein,
-   ggf. Descriptions nachschärfen.
-3. Review-Dauer extern, nicht steuerbar.
+1. **OpenAI-Organisation „RAGSource"** anlegen + verifizieren — einmalig, Publisher
+   aller drei Apps. Langer Vorlauf.
+2. **Deploy:** `wrangler deploy --env app-amtsschimmel` (bzw. `-brandmeister` /
+   `-paragrafenreiter`). Läuft auch automatisch via `deploy.yml` bei Merge nach `main`.
+3. **Cloudflare Custom Domains** im Dashboard zuweisen:
+   - `ragsource-api-v2-app-amtsschimmel` → `app.amtsschimmel.ai`
+   - `ragsource-api-v2-app-brandmeister` → `app.brandmeister.ai`
+   - `ragsource-api-v2-app-paragrafenreiter` → `app.paragrafenreiter.ai`
+4. **Test** je App im ChatGPT Dev Mode (URL `https://app.<marke>.ai/mcp`, Auth OAuth).
+5. **Datenschutz-URL** je Marke sicherstellen; **Logo** je Marke (PNG ≥128 px).
+6. **Submission** je App über das OpenAI-Dashboard — sequenziell, amtsschimmel zuerst.
 
 ## Out of Scope
 
-UI-Komponenten · `search`/`fetch` · Sticky-Geo-Switch · Claude-Migration auf `app.`
-(später, eigener Vorgang).
+UI-Komponenten · `search`/`fetch`-Connector · Sticky-Geo-Switch.
