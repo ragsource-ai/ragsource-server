@@ -23,6 +23,7 @@ import type {
   QueryHit,
 } from "./types.js";
 import { resolveGeo, suggestGeo, type ResolvedGeo, type AmbiguousGeo, type GeoCandidate } from "./engine/normalize.js";
+import { getEndpointProfile, buildNotConfiguredHinweis } from "./engine/endpoint-profiles.js";
 import { resolveExtensions, buildExtensionsWarning, EXTENSIONS_PARAMETER_DESCRIPTION, type ExtensionResolution } from "./engine/extensions.js";
 
 // -----------------------------------------------------------------------
@@ -296,90 +297,9 @@ function resolveMandatoryEndpoint(): string | undefined {
   }
 }
 
-// -----------------------------------------------------------------------
-// Endpoint-Profile (statisches Branding pro Tenant — Single Source of Truth)
-//
-// Statisches Inhalts-Branding lebt im Code (versioniert, in git, Code-Review).
-// Dynamische Inhalte (Wartungs-Banner, etc.) gibt es im aktuellen Setup nicht;
-// für Live-Pflege ohne Redeploy müsste eine bewusste Override-Mechanik wieder
-// eingeführt werden — bis dahin: jede inhaltliche Änderung läuft über git/Deploy.
-// -----------------------------------------------------------------------
-
-interface EndpointProfile {
-  /** Branding-Text mit Markdown — wird als system_message im Catalog-Response geliefert */
-  systemMessage: string;
-  /** Kontakt-Adresse für not_configured-Hinweise und sonstige Verweise */
-  contactMail: string;
-  /**
-   * Optionaler Betriebskontrakt — kompakte, imperative Verhaltensregeln.
-   * Wird als `operating_rules` in die erste Catalog-Response pro Session gelegt.
-   * Gesetzt für Endpoints ohne nutzerseitigen Systemprompt (App-Directory).
-   */
-  operatingRules?: string;
-}
-
-const RAGSOURCE_BRANDING =
-  "**Powered by RAGSource.ai** — Mehr Infos [hier](https://www.ragsource.ai)";
-
-/**
- * Betriebskontrakt für kommunale Endpoints (amtsschimmel / App-Directory).
- * Kompakt, imperativ, nummeriert — wird über das Endpoint-Profil als
- * `operating_rules` in die erste Catalog-Response gelegt. Ersetzt den früher
- * nutzerseitig eingefügten Systemprompt für Clients ohne Prompt-Slot.
- * Redaktionelle Quelle: src/prompts/masterprompt-amtsschimmel.md.
- */
-const OPERATING_RULES_KOMMUNAL =
-  "Verbindliche Arbeitsregeln (amtsschimmel.ai):\n" +
-  "1. Bei jeder Rechtsfrage zuerst RAGSource_catalog aufrufen — keine Antwort ohne Catalog.\n" +
-  "2. Nur Paragrafen zitieren, deren Wortlaut zuvor per RAGSource_get geladen wurde — keine §§ aus dem Gedächtnis.\n" +
-  "3. Wörtliche Zitate in Anführungszeichen mit exakter Fundstelle (z. B. § 39 GemO BW).\n" +
-  "4. Schlussfolgerungen aus geladenen §§ ausdrücklich als „Einschätzung\" kennzeichnen — nie als Zitat.\n" +
-  "5. Fehlt eine passende Quelle: offen benennen und auf Rechtsamt/Gemeindetag verweisen — Lücken nie still mit Allgemeinwissen füllen.\n" +
-  "6. Vorrangig die spezifischste Ebene heranziehen (Gemeinde vor Kreis vor Land vor Bund).\n" +
-  "7. Für eine andere Gemeinde oder Region den geo-Parameter explizit übergeben.\n" +
-  "8. Keine personenbezogenen Daten an die Tools übergeben.\n" +
-  "9. Entscheidungsorientiert antworten: Kernaussage zuerst, dann Rechtsgrundlage, dann Handlungsoption.";
-
-const ENDPOINT_PROFILES: Record<string, EndpointProfile> = {
-  amtsschimmel: {
-    systemMessage:
-      "**amtsschimmel.ai — die kommunale Wissensbasis.** Mehr Infos: [www.amtsschimmel.ai](https://www.amtsschimmel.ai)",
-    contactMail: "kontakt@amtsschimmel.ai",
-  },
-  brandmeister: {
-    // Brandmeister nutzt bewusst das RAGSource-Branding (analog zum bisherigen
-    // Live-Verhalten — kein eigener system_message:brandmeister-KV-Eintrag existierte).
-    systemMessage: RAGSOURCE_BRANDING,
-    contactMail: "kontakt@brandmeister.ai",
-  },
-  all: {
-    // "all" = paragrafenreiter (kein Tenancy-Filter).
-    systemMessage:
-      "**Powered by paragrafenreiter.ai** — Mehr Infos [hier](https://www.paragrafenreiter.ai)",
-    contactMail: "kontakt@paragrafenreiter.ai",
-  },
-  default: {
-    systemMessage: RAGSOURCE_BRANDING,
-    contactMail: "info@ragsource.ai",
-  },
-};
-
-/** Liefert das Profil für einen Endpoint (mit Default-Fallback). */
-function getEndpointProfile(endpoint: string | undefined): EndpointProfile {
-  return ENDPOINT_PROFILES[endpoint ?? "default"] ?? ENDPOINT_PROFILES.default;
-}
-
-/** Baut den `not_configured`-Hinweistext aus dem Endpoint-Profil. */
-function buildNotConfiguredHinweis(profile: EndpointProfile, gemeindeName: string): string {
-  return (
-    `Hinweis an den Assistenten: Die Gemeinde "${gemeindeName}" ist noch nicht als eigenständige ` +
-    `Rechtsquelle hinterlegt. Es werden nur übergeordnete Regelungen (Land/Kreis/Verband) gezeigt — ` +
-    `diese im Catalog konkret benennen. ` +
-    `Teile dem Nutzer mit: 'Ihre Gemeinde wurde noch nicht aufgenommen. ` +
-    `Es werden Ihnen übergeordnete Regelungen angezeigt. Um Ihre Gemeinde aufzunehmen, ` +
-    `schreiben Sie bitte an ${profile.contactMail}'.`
-  );
-}
+// Endpoint-Profile (Branding + Betriebskontrakt) leben als pures Datenmodul
+// in ./engine/endpoint-profiles.ts — getEndpointProfile / buildNotConfiguredHinweis
+// werden oben importiert.
 
 // -----------------------------------------------------------------------
 // Geo-Hilfsfunktionen
@@ -596,17 +516,21 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     this.server.tool(
       "RAGSource_catalog",
-      "STEP 1 — Required first call for every request. " +
+      "STEP 1 — MANDATORY FIRST STEP. You MUST call this before answering any legal question. " +
+      "Never cite a law, §, or article that was not discovered and loaded through this workflow. " +
       "Returns available legal sources (EU to municipal level) and optional skills (typ:skill). " +
       "\n\n" +
-      "CRITICAL — Skill-Loading-Rule: Skills are practice supplements, NEVER substitutes for legal sources. " +
+      "Routing by size — ALWAYS follow: S → call RAGSource_get directly; M/L → call RAGSource_toc first, " +
+      "then RAGSource_get. Never call RAGSource_get on an M/L source without RAGSource_toc first. " +
+      "\n\n" +
+      "CRITICAL — Skill-Loading-Rule: skills are practice supplements, NEVER substitutes for legal sources. " +
       "Do NOT answer from skills alone. For every skill you load, ALSO load the underlying Säule-1 " +
       "sources (FwDVen, Landesgesetze, Verordnungen) it references. The skill hint typically lists " +
       "'Quellen: …' — these are the mandatory companion sources to load. If unsure which legal " +
       "sources accompany a skill, load the skill first to read its 'Quellen'-section, then load those. " +
       "\n\n" +
-      "Routing by size: S → RAGSource_get directly; M/L → RAGSource_toc first, then RAGSource_get. " +
-      "system_message in response: prepend verbatim as italicized system notice to the user.",
+      "Response fields: 'operating_rules' (when present) are BINDING — follow them for the whole conversation. " +
+      "'system_message' — prepend verbatim as an italicized system notice to the user.",
       {
         geo: z
           .string()
@@ -797,25 +721,22 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           : null;
         if (operatingRules) this._rulesSent = true;
 
+        const payload = {
+          ...(systemMessage && { system_message: systemMessage }),
+          ...(operatingRules && { operating_rules: operatingRules }),
+          geo: geoInfo,
+          ...(extensionsBlock && extensionsBlock),
+          total: sorted.length,
+          ...(notConfigured && { not_configured: true, hinweis: notConfiguredHinweis }),
+          schema: ["id", "titel", "rang", "size", "toc", "hint"],
+          rang_legende: { 0: "EU", 1: "Bund", 2: "Land", 3: "Kreis", 4: "Verband", 5: "Gemeinde", 6: "Tarifrecht" },
+          size_legende: { S: "get direkt", M: "toc empfohlen", L: "toc erforderlich" },
+          ...(skillCatalog.length > 0 && { skills: skillCatalog }),
+          sources: sourceCatalog,
+        };
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                ...(systemMessage && { system_message: systemMessage }),
-                ...(operatingRules && { operating_rules: operatingRules }),
-                geo: geoInfo,
-                ...(extensionsBlock && extensionsBlock),
-                total: sorted.length,
-                ...(notConfigured && { not_configured: true, hinweis: notConfiguredHinweis }),
-                schema: ["id", "titel", "rang", "size", "toc", "hint"],
-                rang_legende: { 0: "EU", 1: "Bund", 2: "Land", 3: "Kreis", 4: "Verband", 5: "Gemeinde", 6: "Tarifrecht" },
-                size_legende: { S: "get direkt", M: "toc empfohlen", L: "toc erforderlich" },
-                ...(skillCatalog.length > 0 && { skills: skillCatalog }),
-                sources: sourceCatalog,
-              }),
-            },
-          ],
+          content: [{ type: "text" as const, text: JSON.stringify(payload) }],
+          structuredContent: payload,
         };
       },
     );
@@ -825,10 +746,11 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     this.server.tool(
       "RAGSource_toc",
-      "STEP 2 — Table of contents for medium/large sources. " +
+      "STEP 2 — MANDATORY for medium/large (M/L) sources before RAGSource_get. " +
+      "Never call RAGSource_get on an M/L source without first obtaining its section list here. " +
       "Returns all §§/articles with short titles, e.g. '§ 6 Aufgaben (Pflichtaufgaben, Mindeststärke)'. " +
-      "Batch: up to 8 sources per call. Pass sections values verbatim to RAGSource_get. " +
-      "Fallback: if no TOC file exists, small/medium sources return all §§ directly in 'sections' — skip RAGSource_get for those.",
+      "Batch up to 8 sources per call. Pass section references verbatim to RAGSource_get. " +
+      "If no TOC file exists, small/medium sources return all §§ directly in 'sections' — use those, skip RAGSource_get.",
       {
         sources: z
           .array(z.string())
@@ -906,13 +828,10 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           };
         });
 
+        const payload = { tocs: results };
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({ tocs: results }, null, 2),
-            },
-          ],
+          content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+          structuredContent: payload,
         };
       },
     );
@@ -922,11 +841,12 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     this.server.tool(
       "RAGSource_get",
-      "STEP 3 — Loads original text of §§ from one or more legal sources. " +
+      "STEP 3 — Loads the verbatim original text of §§ from one or more legal sources. " +
+      "You MUST load a § here before quoting it or relying on it — never cite from memory. " +
+      "Use section references exactly as returned by RAGSource_toc, e.g. '§ 2', 'Artikel 6'. " +
       "Batch multiple sources in one call for efficiency. " +
-      "Use sections values exactly as returned by RAGSource_toc, e.g. '§ 2', 'Artikel 6'. " +
       "Limits: 8 sources / 25 §§ per source / 50 §§ total. " +
-      "Response includes 'quelle_url' for source citations — use as Markdown link in citations.",
+      "Response includes 'quelle_url' — use it as a Markdown link in every citation.",
       {
         sources: z
           .array(
@@ -1078,23 +998,16 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           });
         }
 
+        const payload = {
+          results,
+          total_sections: totalSectionsLoaded,
+          ...(truncated && {
+            hinweis: "Limit von 50 §§ pro Aufruf erreicht — nicht alle angeforderten §§ wurden geladen. Bitte Aufruf aufteilen.",
+          }),
+        };
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  results,
-                  total_sections: totalSectionsLoaded,
-                  ...(truncated && {
-                    hinweis: "Limit von 50 §§ pro Aufruf erreicht — nicht alle angeforderten §§ wurden geladen. Bitte Aufruf aufteilen.",
-                  }),
-                },
-                null,
-                2,
-              ),
-            },
-          ],
+          content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+          structuredContent: payload,
         };
       },
     );
@@ -1104,11 +1017,11 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
     // ===================================================================
     if (!this.env.DISABLE_QUERY) this.server.tool(
       "RAGSource_query",
-      "FALLBACK / CROSS-SEARCH — two use cases: " +
-      "(1) RAGSource_catalog returns no matching source; " +
-      "(2) topic unclear or cross-source search needed (e.g. 'Which §§ mention Spielhallen?'). " +
-      "Do not use if source is already known from catalog — prefer toc + get. " +
-      "Full-text search, max. 20 results with source_id and section references for RAGSource_get.",
+      "FALLBACK / CROSS-SEARCH — use ONLY when: " +
+      "(1) RAGSource_catalog returns no matching source, or " +
+      "(2) the topic is unclear or a cross-source search is needed (e.g. 'Which §§ mention Spielhallen?'). " +
+      "Do NOT use as a substitute for the catalog → toc → get workflow when the source is already known. " +
+      "Full-text search, max. 20 results with source_id and section references — load the actual text via RAGSource_get.",
       {
         query: z
           .string()
@@ -1247,23 +1160,16 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             }
           : null;
 
+        const payload = {
+          query,
+          geo: geoInfo,
+          ...(extensionsBlock && extensionsBlock),
+          treffer: hits.length,
+          results: hits,
+        };
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  query,
-                  geo: geoInfo,
-                  ...(extensionsBlock && extensionsBlock),
-                  treffer: hits.length,
-                  results: hits,
-                },
-                null,
-                2,
-              ),
-            },
-          ],
+          content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+          structuredContent: payload,
         };
       },
     );
