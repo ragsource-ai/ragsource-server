@@ -24,7 +24,7 @@
  */
 
 import type { Env } from "./types.js";
-import { resolveGeo, suggestGeo, type GeoCandidate } from "./engine/normalize.js";
+import { resolveGeo, suggestGeo, normalizeString, type GeoCandidate } from "./engine/normalize.js";
 import { resolveHostConfig, getEndpointProfile } from "./engine/endpoint-profiles.js";
 
 // -----------------------------------------------------------------------
@@ -192,17 +192,27 @@ export async function handleClientRegistration(request: Request, env: Env): Prom
 // -----------------------------------------------------------------------
 
 export async function handleGeoSearch(request: Request, env: Env): Promise<Response> {
-  const q = (new URL(request.url).searchParams.get("q") ?? "").trim();
+  const q = (new URL(request.url).searchParams.get("q") ?? "").trim().toLowerCase().slice(0, 80);
   if (q.length < 2) return json({ results: [] });
 
-  // suggestGeo liefert Prefix-Treffer auf Gemeinde-Ebene — deckt den Regelfall ab.
-  // Kreis-/Verband-/Landnamen werden beim Absenden durch resolveGeo() aufgelöst.
-  const candidates = await suggestGeo(q.slice(0, 80), env.DB, 10);
-  const results = candidates.map((c) => ({
-    ars: c.ars,
-    name: c.name,
-    kreis: c.kreis,
-    level: c.typ,
+  // Prefix-Match auf dem VOLLSTÄNDIGEN Gemeindenamen — damit "bad bo" gezielt
+  // "Bad Boll" findet (nicht nur das erste Token). Umlaut-normalisierte Variante
+  // mit; kürzere Namen zuerst, damit der exakte Treffer oben steht.
+  // Kreis-/Verband-/Landnamen löst resolveGeo() beim Absenden auf.
+  const normalized = normalizeString(q);
+  const rows = await env.DB
+    .prepare(
+      `SELECT ars, name, kreis FROM gemeinden
+        WHERE LOWER(name) LIKE ?1 OR LOWER(name) LIKE ?2
+        ORDER BY LENGTH(name) LIMIT 10`,
+    )
+    .bind(`${q}%`, `${normalized}%`)
+    .all<{ ars: string; name: string; kreis: string }>();
+  const results = (rows.results ?? []).map((r) => ({
+    ars: r.ars,
+    name: r.name,
+    kreis: r.kreis,
+    level: "gemeinde",
   }));
   return json({ results });
 }
