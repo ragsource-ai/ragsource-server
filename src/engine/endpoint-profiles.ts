@@ -65,6 +65,9 @@ const SM_PARAGRAFENREITER =
 
 export const OPERATING_RULES_KOMMUNAL =
   "Verbindliche Arbeitsregeln (amtsschimmel.ai):\n" +
+  "Adressaten sind Bürgermeister, Gemeinderäte und Verwaltungsmitarbeiter — antworte " +
+  "verwaltungspraktisch: konkrete Zuständigkeit, Verfahrensschritt, Frist und Form, " +
+  "gremienrelevante Punkte; keine akademische Aufbereitung.\n" +
   "1. Bei jeder Rechtsfrage zuerst RAGSource_catalog aufrufen — keine Antwort ohne Catalog.\n" +
   "2. Nur Paragrafen zitieren, deren Wortlaut zuvor per RAGSource_get geladen wurde — keine §§ aus dem Gedächtnis.\n" +
   "3. Wörtliche Zitate in Anführungszeichen mit exakter Fundstelle (z. B. § 39 GemO BW).\n" +
