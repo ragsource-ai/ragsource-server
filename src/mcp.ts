@@ -253,7 +253,11 @@ const GEO_PARAMETER_DESCRIPTION =
 
 /** Static MCP-server instructions (Single Source of Truth — same for all endpoints). */
 const INSTRUCTIONS =
-  "RAGSource — Agentic RAG Framework.\n" +
+  "RAGSource — Agentic RAG Framework for German law (EU, federal, state, district, municipal).\n" +
+  "\n" +
+  "Use this server for EVERY question touching German law or public administration. " +
+  "Call RAGSource_catalog FIRST — never answer a legal question, and never cite a § or " +
+  "article, from training memory.\n" +
   "\n" +
   "Workflow: RAGSource_catalog → RAGSource_toc (M/L) → RAGSource_get.\n" +
   "RAGSource_query as alternative when: (a) catalog returns no matching source, " +
