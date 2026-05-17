@@ -310,10 +310,35 @@ interface EndpointProfile {
   systemMessage: string;
   /** Kontakt-Adresse für not_configured-Hinweise und sonstige Verweise */
   contactMail: string;
+  /**
+   * Optionaler Betriebskontrakt — kompakte, imperative Verhaltensregeln.
+   * Wird als `operating_rules` in die erste Catalog-Response pro Session gelegt.
+   * Gesetzt für Endpoints ohne nutzerseitigen Systemprompt (App-Directory).
+   */
+  operatingRules?: string;
 }
 
 const RAGSOURCE_BRANDING =
   "**Powered by RAGSource.ai** — Mehr Infos [hier](https://www.ragsource.ai)";
+
+/**
+ * Betriebskontrakt für kommunale Endpoints (amtsschimmel / App-Directory).
+ * Kompakt, imperativ, nummeriert — wird über das Endpoint-Profil als
+ * `operating_rules` in die erste Catalog-Response gelegt. Ersetzt den früher
+ * nutzerseitig eingefügten Systemprompt für Clients ohne Prompt-Slot.
+ * Redaktionelle Quelle: src/prompts/masterprompt-amtsschimmel.md.
+ */
+const OPERATING_RULES_KOMMUNAL =
+  "Verbindliche Arbeitsregeln (amtsschimmel.ai):\n" +
+  "1. Bei jeder Rechtsfrage zuerst RAGSource_catalog aufrufen — keine Antwort ohne Catalog.\n" +
+  "2. Nur Paragrafen zitieren, deren Wortlaut zuvor per RAGSource_get geladen wurde — keine §§ aus dem Gedächtnis.\n" +
+  "3. Wörtliche Zitate in Anführungszeichen mit exakter Fundstelle (z. B. § 39 GemO BW).\n" +
+  "4. Schlussfolgerungen aus geladenen §§ ausdrücklich als „Einschätzung\" kennzeichnen — nie als Zitat.\n" +
+  "5. Fehlt eine passende Quelle: offen benennen und auf Rechtsamt/Gemeindetag verweisen — Lücken nie still mit Allgemeinwissen füllen.\n" +
+  "6. Vorrangig die spezifischste Ebene heranziehen (Gemeinde vor Kreis vor Land vor Bund).\n" +
+  "7. Für eine andere Gemeinde oder Region den geo-Parameter explizit übergeben.\n" +
+  "8. Keine personenbezogenen Daten an die Tools übergeben.\n" +
+  "9. Entscheidungsorientiert antworten: Kernaussage zuerst, dann Rechtsgrundlage, dann Handlungsoption.";
 
 const ENDPOINT_PROFILES: Record<string, EndpointProfile> = {
   amtsschimmel: {
@@ -525,6 +550,8 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
   private _currentGeo: string = "";
   /** Extension-Filter aus der MCP-URL (?extensions=Feuerwehr,Arbeitsrecht) */
   private _currentExtensions: string[] = [];
+  /** True, sobald der Betriebskontrakt (operating_rules) einmal ausgeliefert wurde. */
+  private _rulesSent: boolean = false;
 
   /**
    * Placeholder-Server (nötig weil McpAgent die Property beim Start liest).
@@ -763,12 +790,20 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             }
           : null;
 
+        // Betriebskontrakt: nur bei der ersten Catalog-Antwort pro DO-Session
+        // mitliefern — danach weglassen (kein Kontext-Noise auf Folgeaufrufen).
+        const operatingRules = (profile.operatingRules && !this._rulesSent)
+          ? profile.operatingRules
+          : null;
+        if (operatingRules) this._rulesSent = true;
+
         return {
           content: [
             {
               type: "text" as const,
               text: JSON.stringify({
                 ...(systemMessage && { system_message: systemMessage }),
+                ...(operatingRules && { operating_rules: operatingRules }),
                 geo: geoInfo,
                 ...(extensionsBlock && extensionsBlock),
                 total: sorted.length,
