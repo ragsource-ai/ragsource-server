@@ -196,10 +196,11 @@ export async function handleGeoSearch(request: Request, env: Env): Promise<Respo
   if (raw.length < 2) return json({ results: [] });
   const norm = normalizeString(raw);
 
-  // Mehr-Ebenen-Prefix-Suche über Gemeinde, Landkreis, Verband UND Land —
-  // damit auch Bundesländer/Kreise/Verbände im Autocomplete erscheinen.
-  // Straffe Prefix-Suche (kein Substring-AND), kürzeste Namen zuerst.
-  // ?1 = Eingabe, ?2 = umlaut-normalisierte Variante.
+  // Mehr-Ebenen-Suche über Gemeinde, Landkreis, Verband UND Land — damit auch
+  // Bundesländer/Kreise/Verbände im Autocomplete erscheinen. Gemeinde/Kreis/Land
+  // per Prefix (straff, kein Noise); Verband per Substring, weil Verbände als
+  // "GVV Raum Bad Boll" geführt werden — "Bad Boll" soll auch den Verband finden.
+  // ?1/?2 = Prefix-Muster, ?3/?4 = Substring-Muster (je Eingabe + umlaut-normalisiert).
   const sql = `
     SELECT ars, name, kreis, level FROM (
       SELECT ars, name, kreis, 'gemeinde' AS level FROM gemeinden
@@ -209,7 +210,7 @@ export async function handleGeoSearch(request: Request, env: Env): Promise<Respo
         WHERE LOWER(kreis) LIKE ?1 OR LOWER(kreis) LIKE ?2 GROUP BY kreis_ars
       UNION
       SELECT verband_ars AS ars, verband AS name, NULL AS kreis, 'verband' AS level FROM gemeinden
-        WHERE verband_ars IS NOT NULL AND (LOWER(verband) LIKE ?1 OR LOWER(verband) LIKE ?2) GROUP BY verband_ars
+        WHERE verband_ars IS NOT NULL AND (LOWER(verband) LIKE ?3 OR LOWER(verband) LIKE ?4) GROUP BY verband_ars
       UNION
       SELECT land_ars AS ars, land AS name, NULL AS kreis, 'land' AS level FROM gemeinden
         WHERE LOWER(land) LIKE ?1 OR LOWER(land) LIKE ?2 GROUP BY land_ars
@@ -218,7 +219,7 @@ export async function handleGeoSearch(request: Request, env: Env): Promise<Respo
   `;
   const rows = await env.DB
     .prepare(sql)
-    .bind(`${raw}%`, `${norm}%`)
+    .bind(`${raw}%`, `${norm}%`, `%${raw}%`, `%${norm}%`)
     .all<{ ars: string; name: string; kreis: string | null; level: string }>();
   const results = (rows.results ?? []).map((r) => ({
     ars: r.ars,
