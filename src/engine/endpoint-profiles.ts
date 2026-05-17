@@ -60,7 +60,7 @@ const SM_PARAGRAFENREITER =
 // -----------------------------------------------------------------------
 // Betriebskontrakte (operating_rules) — kompakt, imperativ, nummeriert.
 // Ersetzen den früher nutzerseitig eingefügten Systemprompt für Clients ohne
-// Prompt-Slot. Redaktionelle Quellen: src/prompts/masterprompt-*.md
+// Prompt-Slot. Output-/Persona-Feinschliff: docs/projekt-prompts/*.md
 // -----------------------------------------------------------------------
 
 export const OPERATING_RULES_KOMMUNAL =

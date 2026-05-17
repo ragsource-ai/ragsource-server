@@ -227,7 +227,7 @@ function buildFtsQuery(input: string): string | null {
 
 // -----------------------------------------------------------------------
 // MCP Instructions (kurze projektspezifische Beschreibung für MCP-Initialize)
-// Vollständige Masterprompts → src/prompts/*.md (Claude.ai Projekt-System-Prompt)
+// Projekt-Anweisungen für Claude-Projekte → docs/projekt-prompts/*.md
 // -----------------------------------------------------------------------
 
 /**
