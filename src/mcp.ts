@@ -518,11 +518,13 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
       "Routing by size — ALWAYS follow: S → call RAGSource_get directly; M/L → call RAGSource_toc first, " +
       "then RAGSource_get. Never call RAGSource_get on an M/L source without RAGSource_toc first. " +
       "\n\n" +
-      "CRITICAL — Skill-Loading-Rule: skills are practice supplements, NEVER substitutes for legal sources. " +
-      "Do NOT answer from skills alone. For every skill you load, ALSO load the underlying Säule-1 " +
-      "sources (FwDVen, Landesgesetze, Verordnungen) it references. The skill hint typically lists " +
-      "'Quellen: …' — these are the mandatory companion sources to load. If unsure which legal " +
-      "sources accompany a skill, load the skill first to read its 'Quellen'-section, then load those. " +
+      "CRITICAL — Skill-Loading-Rule: skills (typ:skill) complement legal sources — they never " +
+      "replace them. Do NOT answer from skills alone. Skills come in two kinds: practice supplements " +
+      "(decision aids, workflows) and ready-to-use templates (e.g. Sitzungsvorlagen, Musterbeschlüsse). " +
+      "Load every thematically relevant skill — when in doubt, load it rather than skip it. For every " +
+      "skill you load, ALSO load the underlying Säule-1 sources it references; the skill hint typically " +
+      "lists 'Quellen: …' — these are mandatory companion sources. If unsure which sources accompany a " +
+      "skill, load the skill first to read its 'Quellen'-section, then load those. " +
       "\n\n" +
       "Response fields: 'operating_rules' (when present) are BINDING — follow them for the whole conversation. " +
       "'system_message' — prepend verbatim as an italicized system notice to the user.",
