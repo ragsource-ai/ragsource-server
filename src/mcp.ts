@@ -236,11 +236,13 @@ function buildFtsQuery(input: string): string | null {
  * Sonderwerte und das Verhalten bei Mehrdeutigkeit / Unbekanntem ab.
  */
 const GEO_PARAMETER_DESCRIPTION =
-  "IMPORTANT — omit this parameter on the first call. A geo default is " +
-  "normally preconfigured for the connection and is reported back in the response's 'geo' field. " +
-  "Pass geo ONLY (a) if a response returns 'geo_missing', or (b) to switch to a different location " +
-  "the user explicitly named. NEVER derive geo from general context — e.g. do not pass a state " +
-  "(Bundesland) code just because the topic concerns state law. " +
+  "IMPORTANT — a geo default is preconfigured for the connection (reported in the response's " +
+  "'geo' field). Omit geo on the first call UNLESS the user names a concrete place in the question. " +
+  "Pass geo when (a) a response returns 'geo_missing', or (b) the user explicitly names a place — " +
+  "a municipality, district or region — then pass that place, also to narrow down to a municipality " +
+  "within the preconfigured region. NEVER derive geo from the legal topic (e.g. do not pass a " +
+  "Bundesland code just because the question concerns state law). Trigger = a place named in the " +
+  "question, not the subject matter. " +
   "Geographic scope. Accepts ARS code or plain name. " +
   "ARS lengths: 2-digit (state), 5-digit (district), 9-digit (association), 12-digit (municipality). " +
   "Examples: '08' (BW), '083155012074', 'Müllheim Markgräflerland', 'Lkr Göppingen', 'Bayern', 'Breisgau-Hochschwarzwald'. " +
