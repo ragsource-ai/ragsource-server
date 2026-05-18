@@ -606,6 +606,12 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
       "Never cite a law, §, or article that was not discovered and loaded through this workflow. " +
       "Returns available legal sources (EU to municipal level) and optional skills (typ:skill). " +
       "\n\n" +
+      "Before selecting sources: decompose the question into its distinct legal aspects (a question " +
+      "often spans several — e.g. formation, form requirements, fixed-term, termination, ancillary " +
+      "duties) and load EVERY catalog source bearing on ANY of them, including non-obvious ones — " +
+      "completeness over economy. Use your own legal knowledge to anticipate which norms must exist, " +
+      "then locate them in the catalog. " +
+      "\n\n" +
       "Routing by size — ALWAYS follow: S → call RAGSource_get directly; M/L → call RAGSource_toc first, " +
       "then RAGSource_get. Never call RAGSource_get on an M/L source without RAGSource_toc first. " +
       "\n\n" +
