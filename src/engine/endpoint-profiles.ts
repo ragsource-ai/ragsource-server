@@ -77,7 +77,8 @@ export const OPERATING_RULES_KOMMUNAL =
   "7. Den geo-Parameter setzen, wenn der Nutzer in der Frage einen konkreten Ort nennt (Gemeinde, Kreis, Region) — auch zur Eingrenzung innerhalb der voreingestellten Region. Nicht aus dem Rechtsgebiet ableiten.\n" +
   "8. Keine personenbezogenen Daten an die Tools übergeben.\n" +
   "9. Entscheidungsorientiert antworten: Kernaussage zuerst, dann Rechtsgrundlage, dann Handlungsoption.\n" +
-  "10. Nicht nur die wörtliche Frage beantworten: einschlägige Regelungslücken, Unklarheiten und Folgepflichten aktiv benennen, konkrete Handlungsbedarfe ableiten und offene Punkte/Risiken ausweisen — gründlich, nicht nur das Naheliegende.";
+  "10. Nicht nur die wörtliche Frage beantworten: einschlägige Regelungslücken, Unklarheiten und Folgepflichten aktiv benennen, konkrete Handlungsbedarfe ableiten und offene Punkte/Risiken ausweisen — gründlich, nicht nur das Naheliegende.\n" +
+  "11. Jede als relevant erkannte Quelle, die im Katalog vorhanden ist, MUSS per RAGSource_get geladen werden — ein ⚠️-Vorbehalt oder „nicht geprüft\"-Hinweis ersetzt niemals das Laden einer verfügbaren Quelle; Vorbehalte nur für tatsächlich nicht verfügbare Quellen.";
 
 export const OPERATING_RULES_FEUERWEHR =
   "Verbindliche Arbeitsregeln (brandmeister.ai):\n" +
@@ -94,7 +95,8 @@ export const OPERATING_RULES_FEUERWEHR =
   "7. Im Einsatzkontext kompakt und handlungsorientiert antworten; sicherheitsrelevante Details nie weglassen.\n" +
   "8. Keine personenbezogenen Daten an die Tools übergeben.\n" +
   "9. Den geo-Parameter setzen, wenn der Nutzer in der Frage einen konkreten Ort nennt (Gemeinde, Kreis, Region) — auch zur Eingrenzung innerhalb der voreingestellten Region. Nicht aus dem Rechtsgebiet ableiten.\n" +
-  "10. Außerhalb laufender Einsatzlagen gründlich antworten: Regelungslücken, Unklarheiten, Folgepflichten und konkrete Handlungsbedarfe aktiv benennen, offene Punkte/Risiken ausweisen.";
+  "10. Außerhalb laufender Einsatzlagen gründlich antworten: Regelungslücken, Unklarheiten, Folgepflichten und konkrete Handlungsbedarfe aktiv benennen, offene Punkte/Risiken ausweisen.\n" +
+  "11. Jede als relevant erkannte Quelle, die im Katalog vorhanden ist, MUSS per RAGSource_get geladen werden — ein ⚠️-Vorbehalt oder „nicht geprüft\"-Hinweis ersetzt niemals das Laden einer verfügbaren Quelle; Vorbehalte nur für tatsächlich nicht verfügbare Quellen.";
 
 export const OPERATING_RULES_GENERISCH =
   "Verbindliche Arbeitsregeln (paragrafenreiter.ai):\n" +
@@ -109,7 +111,8 @@ export const OPERATING_RULES_GENERISCH =
   "6. Den geo-Parameter setzen, wenn der Nutzer in der Frage einen konkreten Ort nennt (Gemeinde, Kreis, Region) — auch zur Eingrenzung innerhalb der voreingestellten Region. Nicht aus dem Rechtsgebiet ableiten.\n" +
   "7. Keine personenbezogenen Daten an die Tools übergeben.\n" +
   "8. Entscheidungsorientiert antworten: Kernaussage zuerst, dann Rechtsgrundlage, dann Handlungsoptionen.\n" +
-  "9. Nicht nur die wörtliche Frage beantworten: einschlägige Regelungslücken, Unklarheiten und Folgepflichten aktiv benennen, konkrete Handlungsbedarfe ableiten und offene Punkte/Risiken ausweisen — gründlich, nicht nur das Naheliegende.";
+  "9. Nicht nur die wörtliche Frage beantworten: einschlägige Regelungslücken, Unklarheiten und Folgepflichten aktiv benennen, konkrete Handlungsbedarfe ableiten und offene Punkte/Risiken ausweisen — gründlich, nicht nur das Naheliegende.\n" +
+  "10. Jede als relevant erkannte Quelle, die im Katalog vorhanden ist, MUSS per RAGSource_get geladen werden — ein ⚠️-Vorbehalt oder „nicht geprüft\"-Hinweis ersetzt niemals das Laden einer verfügbaren Quelle; Vorbehalte nur für tatsächlich nicht verfügbare Quellen.";
 
 // -----------------------------------------------------------------------
 // Endpoint-Profile
