@@ -61,10 +61,11 @@ test("App-Profile tragen Betriebskontrakt und Picker-Branding", () => {
   }
 });
 
-test("resolveHostConfig — App-Hosts: Marken-Tenancy, eigenes App-Profil", () => {
+test("resolveHostConfig — App-Hosts: Tenancy + eigenes App-Profil", () => {
   assert.deepEqual(resolveHostConfig("app.amtsschimmel.ai"), { tenancy: "amtsschimmel", profile: "amtsschimmel-app" });
   assert.deepEqual(resolveHostConfig("app.brandmeister.ai"), { tenancy: "brandmeister", profile: "brandmeister-app" });
-  assert.deepEqual(resolveHostConfig("app.paragrafenreiter.ai"), { tenancy: "all", profile: "paragrafenreiter-app" });
+  // paragrafenreiter: eigene Tenancy (Minimalkatalog-PoC), nicht mehr "all".
+  assert.deepEqual(resolveHostConfig("app.paragrafenreiter.ai"), { tenancy: "paragrafenreiter", profile: "paragrafenreiter-app" });
 });
 
 test("resolveHostConfig — Bestands-Hosts unverändert, unbekannter Host undefined", () => {
