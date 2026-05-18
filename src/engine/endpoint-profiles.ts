@@ -33,6 +33,8 @@ export interface EndpointProfile {
     subtitle: string;
     /** CSS-Akzentfarbe (Hex) */
     accent: string;
+    /** URL zur Datenschutzerklärung — wird im Picker-Footer verlinkt */
+    privacyUrl?: string;
   };
 }
 
@@ -149,6 +151,7 @@ export const ENDPOINT_PROFILES: Record<string, EndpointProfile> = {
       name: "amtsschimmel.ai",
       subtitle: "Die kommunale Wissensbasis",
       accent: "#1e3a5f",
+      privacyUrl: "https://amtsschimmel.ai/datenschutz.html",
     },
   },
   "brandmeister-app": {
@@ -159,6 +162,7 @@ export const ENDPOINT_PROFILES: Record<string, EndpointProfile> = {
       name: "brandmeister.ai",
       subtitle: "Recherche für Feuerwehr & Brandschutz",
       accent: "#c0392b",
+      privacyUrl: "https://brandmeister.ai/datenschutz.html",
     },
   },
   "paragrafenreiter-app": {
@@ -169,6 +173,7 @@ export const ENDPOINT_PROFILES: Record<string, EndpointProfile> = {
       name: "paragrafenreiter.ai",
       subtitle: "Zitiersichere Rechtsrecherche",
       accent: "#475569",
+      privacyUrl: "https://paragrafenreiter.ai/datenschutz.html",
     },
   },
 };

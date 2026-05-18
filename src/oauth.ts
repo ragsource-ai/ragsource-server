@@ -103,6 +103,7 @@ interface PickerBranding {
   name: string;
   subtitle: string;
   accent: string;
+  privacyUrl?: string;
 }
 
 /** Ermittelt das Picker-Branding aus dem Host (über das Endpoint-Profil). */
@@ -531,6 +532,9 @@ function pickerHtml(params: {
       font-size: 1rem; font-weight: 600; cursor: pointer; transition: filter .15s;
     }
     button.submit:hover { filter: brightness(0.92); }
+    .privacy-link { margin-top: 1rem; text-align: center; font-size: .75rem; color: #94a3b8; }
+    .privacy-link a { color: #94a3b8; text-decoration: underline; }
+    .privacy-link a:hover { color: #64748b; }
   </style>
 </head>
 <body>
@@ -557,6 +561,7 @@ function pickerHtml(params: {
 
       <button type="submit" class="submit">Verbinden</button>
     </form>
+    ${branding.privacyUrl ? `<p class="privacy-link"><a href="${esc(branding.privacyUrl)}" target="_blank" rel="noopener">Datenschutzerklärung</a></p>` : ""}
   </div>
 
   <script>
