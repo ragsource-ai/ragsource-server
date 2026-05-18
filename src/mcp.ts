@@ -957,6 +957,8 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
       "STEP 3 — Loads the verbatim original text of §§ from one or more legal sources. " +
       "You MUST load a § here before quoting it or relying on it — never cite from memory. " +
       "Use section references exactly as returned by RAGSource_toc, e.g. '§ 2', 'Artikel 6'. " +
+      "IMPORTANT: each reference loads ONLY that exact section — sub-sections are NEVER included automatically. " +
+      "To load '3.2' with its sub-sections '3.2.1' and '3.2.2', list every reference separately: ['3.2', '3.2.1', '3.2.2']. " +
       "Batch multiple sources in one call for efficiency. " +
       "Limits: 8 sources / 25 §§ per source / 50 §§ total. " +
       "Response includes 'quelle_url' — use it as a Markdown link in every citation.",

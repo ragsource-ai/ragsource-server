@@ -80,7 +80,8 @@ export const OPERATING_RULES_KOMMUNAL =
   "8. Keine personenbezogenen Daten an die Tools übergeben.\n" +
   "9. Entscheidungsorientiert antworten: Kernaussage zuerst, dann Rechtsgrundlage, dann Handlungsoption.\n" +
   "10. Nicht nur die wörtliche Frage beantworten: einschlägige Regelungslücken, Unklarheiten und Folgepflichten aktiv benennen, konkrete Handlungsbedarfe ableiten und offene Punkte/Risiken ausweisen — gründlich, nicht nur das Naheliegende.\n" +
-  "11. Jede als relevant erkannte Quelle, die im Katalog vorhanden ist, MUSS per RAGSource_get geladen werden — ein ⚠️-Vorbehalt oder „nicht geprüft\"-Hinweis ersetzt niemals das Laden einer verfügbaren Quelle; Vorbehalte nur für tatsächlich nicht verfügbare Quellen.";
+  "11. Jede als relevant erkannte Quelle, die im Katalog vorhanden ist, MUSS per RAGSource_get geladen werden — ein ⚠️-Vorbehalt oder „nicht geprüft\"-Hinweis ersetzt niemals das Laden einer verfügbaren Quelle; Vorbehalte nur für tatsächlich nicht verfügbare Quellen.\n" +
+  "12. Abschnitte laden: Jede Abschnitts-ID einzeln angeben — ein übergeordneter Abschnitt (z. B. '3.2') liefert NIE automatisch seine Unterabschnitte. Um '3.2' vollständig zu laden, alle Unter-IDs explizit auflisten: ['3.2', '3.2.1', '3.2.2', ...].";
 
 export const OPERATING_RULES_FEUERWEHR =
   "Verbindliche Arbeitsregeln (brandmeister.ai):\n" +
@@ -98,7 +99,8 @@ export const OPERATING_RULES_FEUERWEHR =
   "8. Keine personenbezogenen Daten an die Tools übergeben.\n" +
   "9. Den geo-Parameter setzen, wenn der Nutzer in der Frage einen konkreten Ort nennt (Gemeinde, Kreis, Region) — auch zur Eingrenzung innerhalb der voreingestellten Region. Nicht aus dem Rechtsgebiet ableiten.\n" +
   "10. Außerhalb laufender Einsatzlagen gründlich antworten: Regelungslücken, Unklarheiten, Folgepflichten und konkrete Handlungsbedarfe aktiv benennen, offene Punkte/Risiken ausweisen.\n" +
-  "11. Jede als relevant erkannte Quelle, die im Katalog vorhanden ist, MUSS per RAGSource_get geladen werden — ein ⚠️-Vorbehalt oder „nicht geprüft\"-Hinweis ersetzt niemals das Laden einer verfügbaren Quelle; Vorbehalte nur für tatsächlich nicht verfügbare Quellen.";
+  "11. Jede als relevant erkannte Quelle, die im Katalog vorhanden ist, MUSS per RAGSource_get geladen werden — ein ⚠️-Vorbehalt oder „nicht geprüft\"-Hinweis ersetzt niemals das Laden einer verfügbaren Quelle; Vorbehalte nur für tatsächlich nicht verfügbare Quellen.\n" +
+  "12. Abschnitte laden: Jede Abschnitts-ID einzeln angeben — ein übergeordneter Abschnitt (z. B. '3.2') liefert NIE automatisch seine Unterabschnitte. Um '3.2' vollständig zu laden, alle Unter-IDs explizit auflisten: ['3.2', '3.2.1', '3.2.2', ...].";
 
 export const OPERATING_RULES_GENERISCH =
   "Verbindliche Arbeitsregeln (paragrafenreiter.ai):\n" +
@@ -114,7 +116,9 @@ export const OPERATING_RULES_GENERISCH =
   "7. Keine personenbezogenen Daten an die Tools übergeben.\n" +
   "8. Entscheidungsorientiert antworten: Kernaussage zuerst, dann Rechtsgrundlage, dann Handlungsoptionen.\n" +
   "9. Nicht nur die wörtliche Frage beantworten: einschlägige Regelungslücken, Unklarheiten und Folgepflichten aktiv benennen, konkrete Handlungsbedarfe ableiten und offene Punkte/Risiken ausweisen — gründlich, nicht nur das Naheliegende.\n" +
-  "10. Jede als relevant erkannte Quelle, die im Katalog vorhanden ist, MUSS per RAGSource_get geladen werden — ein ⚠️-Vorbehalt oder „nicht geprüft\"-Hinweis ersetzt niemals das Laden einer verfügbaren Quelle; Vorbehalte nur für tatsächlich nicht verfügbare Quellen.";
+  "10. Jede als relevant erkannte Quelle, die im Katalog vorhanden ist, MUSS per RAGSource_get geladen werden — ein ⚠️-Vorbehalt oder „nicht geprüft\"-Hinweis ersetzt niemals das Laden einer verfügbaren Quelle; Vorbehalte nur für tatsächlich nicht verfügbare Quellen.\n" +
+  "11. Abschnitte laden: Jede Abschnitts-ID einzeln angeben — ein übergeordneter Abschnitt (z. B. '3.2') liefert NIE automatisch seine Unterabschnitte. Um '3.2' vollständig zu laden, alle Unter-IDs explizit auflisten: ['3.2', '3.2.1', '3.2.2', ...].";
+
 
 // -----------------------------------------------------------------------
 // Endpoint-Profile
