@@ -834,6 +834,9 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
           schema: ["id", "rang", "size", "toc", "hint"],
           rang_legende: { 0: "EU", 1: "Bund", 2: "Land", 3: "Kreis", 4: "Verband", 5: "Gemeinde", 6: "Tarifrecht" },
           size_legende: { S: "get direkt", M: "toc empfohlen", L: "toc erforderlich" },
+          katalog_hinweis: "Standardkatalog — tenancy-gefiltert. Fehlt eine benötigte " +
+            "Rechtsquelle bzw. ein Rechtsgebiet, RAGSource_catalog mit dem extensions-Parameter " +
+            "erneut aufrufen (gültige Rechtsgebiete: siehe extensions-Parameter-Beschreibung).",
           ...idLegend,
           ...(skillCatalog.length > 0 && { skills: skillCatalog }),
           sources: sourceCatalog,

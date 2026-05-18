@@ -186,13 +186,13 @@ export function getEndpointProfile(profile: string | undefined): EndpointProfile
 export const ENDPOINT_BY_HOST: Record<string, HostConfig> = {
   "mcp.amtsschimmel.ai":      { tenancy: "amtsschimmel", profile: "amtsschimmel" },
   "mcp-lean.amtsschimmel.ai": { tenancy: "amtsschimmel", profile: "amtsschimmel" },
-  "mcp.paragrafenreiter.ai":  { tenancy: "all",          profile: "all" },
+  "mcp.paragrafenreiter.ai":  { tenancy: "paragrafenreiter", profile: "all" },
   "mcp.brandmeister.ai":      { tenancy: "brandmeister", profile: "brandmeister" },
   "mcp-gp1.brandmeister.ai":  { tenancy: "brandmeister", profile: "brandmeister" },
   "mcp-ct1.ragsource.ai":     { tenancy: "all",          profile: "all" },
   "app.amtsschimmel.ai":      { tenancy: "amtsschimmel", profile: "amtsschimmel-app" },
   "app.brandmeister.ai":      { tenancy: "brandmeister", profile: "brandmeister-app" },
-  "app.paragrafenreiter.ai":  { tenancy: "all",          profile: "paragrafenreiter-app" },
+  "app.paragrafenreiter.ai":  { tenancy: "paragrafenreiter", profile: "paragrafenreiter-app" },
 };
 
 /** Liefert die Host-Konfiguration (Tenancy + Profil), oder undefined bei Direktaufruf. */
