@@ -1390,7 +1390,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             .min(1)
             .max(50)
             .optional()
-            .describe("Maximum number of rows. Default 5, max 50."),
+            .describe("Maximum number of rows. Default 50 (returns all matches up to 50). Set lower only if intentionally sampling."),
           order_by: z
             .object({
               column: z.string(),
@@ -1468,7 +1468,7 @@ export class RAGSourceMCPv2 extends McpAgent<Env> {
             orderSql = ` ORDER BY \`${order_by.column}\` ${dir}`;
           }
 
-          const effectiveLimit = Math.min(limit ?? 5, 50);
+          const effectiveLimit = Math.min(limit ?? 50, 50);
           const colList = selectCols.map((c) => `\`${c}\``).join(", ");
           const tableName = `db_${dbName}`;
           const fullSql = `SELECT ${colList} FROM ${tableName}${whereSql ? ` WHERE ${whereSql}` : ""}${orderSql} LIMIT ${effectiveLimit + 1}`;
